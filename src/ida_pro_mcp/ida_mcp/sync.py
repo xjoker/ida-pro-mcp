@@ -50,13 +50,55 @@ def _get_tool_timeout_seconds() -> float:
         return _DEFAULT_TOOL_TIMEOUT_SEC
 
 
+# ============================================================================
+# Queue Object Pool - Reduces GC pressure and allocation overhead
+# ============================================================================
+
+
+class QueuePool:
+    """Object pool for Queue instances to reduce allocation overhead.
+
+    Reuses Queue objects instead of creating new ones for each IDA sync call.
+    Thread-safe implementation with automatic cleanup.
+    """
+
+    def __init__(self, max_size: int = 50):
+        self._pool: queue.Queue = queue.Queue(maxsize=max_size)
+        self._max_size = max_size
+
+    def acquire(self) -> queue.Queue:
+        """Get a Queue from the pool or create a new one."""
+        try:
+            return self._pool.get_nowait()
+        except queue.Empty:
+            return queue.Queue()
+
+    def release(self, q: queue.Queue):
+        """Return a Queue to the pool after clearing it."""
+        # Clear the queue before returning to pool
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except queue.Empty:
+                break
+        # Try to return to pool
+        try:
+            self._pool.put_nowait(q)
+        except queue.Full:
+            # Pool full, let GC handle it
+            pass
+
+
+_queue_pool = QueuePool()
+
+
 call_stack = queue.LifoQueue()
 
 
 def _sync_wrapper(ff):
     """Call a function ff with a specific IDA safety_mode."""
 
-    res_container = queue.Queue()
+    res_container = _queue_pool.acquire()
 
     def runned():
         if not call_stack.empty():
@@ -74,6 +116,7 @@ def _sync_wrapper(ff):
 
     idaapi.execute_sync(runned, idaapi.MFF_WRITE)
     res = res_container.get()
+    _queue_pool.release(res_container)
     if isinstance(res, Exception):
         raise res
     return res

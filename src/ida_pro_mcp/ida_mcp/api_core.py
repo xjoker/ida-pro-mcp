@@ -10,6 +10,7 @@ import ida_nalt
 
 from .rpc import tool
 from .sync import idasync
+from .cache import function_cache, string_cache
 
 # Cached strings list: [(ea, text), ...]
 _strings_cache: list[tuple[int, str]] | None = None
@@ -98,6 +99,13 @@ def lookup_funcs(
 
     results = []
     for query in queries:
+        # Try cache first
+        cache_key = f"lookup:{query}"
+        cached = function_cache.get(cache_key)
+        if cached is not None:
+            results.append(cached)
+            continue
+
         try:
             # Fast path: 0x<ea> or sub_<ea>
             ea = _parse_func_query(query)
@@ -109,15 +117,17 @@ def lookup_funcs(
             if ea != idaapi.BADADDR:
                 func = get_function(ea, raise_error=False)
                 if func:
-                    results.append({"query": query, "fn": func, "error": None})
+                    result = {"query": query, "fn": func, "error": None}
                 else:
-                    results.append(
-                        {"query": query, "fn": None, "error": "Not a function"}
-                    )
+                    result = {"query": query, "fn": None, "error": "Not a function"}
             else:
-                results.append({"query": query, "fn": None, "error": "Not found"})
+                result = {"query": query, "fn": None, "error": "Not found"}
         except Exception as e:
-            results.append({"query": query, "fn": None, "error": str(e)})
+            result = {"query": query, "fn": None, "error": str(e)}
+
+        # Cache the result
+        function_cache.set(cache_key, result)
+        results.append(result)
 
     return results
 

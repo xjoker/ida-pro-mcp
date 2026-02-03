@@ -9,6 +9,7 @@ import ida_dirtree
 
 from .rpc import tool
 from .sync import idasync, IDAError
+from .cache import invalidate_function_caches, decompile_cache
 from .utils import (
     parse_address,
     decompile_checked,
@@ -42,6 +43,11 @@ def set_comments(items: list[CommentOp] | CommentOp):
 
         try:
             ea = parse_address(addr_str)
+
+            # Invalidate decompile cache for this function
+            func = idaapi.get_func(ea)
+            if func:
+                decompile_cache.invalidate(hex(func.start_ea))
 
             if not idaapi.set_cmt(ea, comment, False):
                 results.append(
@@ -215,6 +221,8 @@ def rename(batch: RenameBatch) -> dict:
                 had_user_name = _has_user_name(ea)
                 success = idaapi.set_name(ea, item["name"], idaapi.SN_CHECK)
                 if success:
+                    # Invalidate caches for this function
+                    invalidate_function_caches(ea)
                     func = idaapi.get_func(ea)
                     if func:
                         refresh_decompiler_ctext(func.start_ea)

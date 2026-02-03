@@ -15,6 +15,7 @@ import ida_ua
 import ida_name
 from .rpc import tool
 from .sync import idasync, tool_timeout
+from .cache import decompile_cache, xrefs_cache
 from .utils import (
     parse_address,
     normalize_list_input,
@@ -158,10 +159,24 @@ def decompile(
     """Decompile function to pseudocode"""
     try:
         start = parse_address(addr)
+
+        # Try cache first
+        cache_key = hex(start)
+        cached = decompile_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         code = decompile_function_safe(start)
         if code is None:
-            return {"addr": addr, "code": None, "error": "Decompilation failed"}
-        return {"addr": addr, "code": code}
+            result = {"addr": addr, "code": None, "error": "Decompilation failed"}
+        else:
+            result = {"addr": addr, "code": code}
+
+        # Cache successful decompilations
+        if code is not None:
+            decompile_cache.set(cache_key, result)
+
+        return result
     except Exception as e:
         return {"addr": addr, "code": None, "error": str(e)}
 
@@ -326,6 +341,13 @@ def xrefs_to(
     results = []
 
     for addr in addrs:
+        # Try cache first
+        cache_key = f"xrefs:{addr}:{limit}"
+        cached = xrefs_cache.get(cache_key)
+        if cached is not None:
+            results.append(cached)
+            continue
+
         try:
             xrefs = []
             more = False
@@ -340,9 +362,13 @@ def xrefs_to(
                         fn=get_function(xref.frm, raise_error=False),
                     )
                 )
-            results.append({"addr": addr, "xrefs": xrefs, "more": more})
+            result = {"addr": addr, "xrefs": xrefs, "more": more}
         except Exception as e:
-            results.append({"addr": addr, "xrefs": None, "error": str(e)})
+            result = {"addr": addr, "xrefs": None, "error": str(e)}
+
+        # Cache the result
+        xrefs_cache.set(cache_key, result)
+        results.append(result)
 
     return results
 

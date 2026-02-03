@@ -5,11 +5,13 @@ import re
 import struct
 import sys
 import tempfile
+from itertools import islice
 from typing import (
     Annotated,
     Any,
     Callable,
     Generic,
+    Iterator,
     Literal,
     NotRequired,
     Optional,
@@ -686,6 +688,55 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
     return {
         "data": data[offset : offset + count],
         "next_offset": next_offset,
+    }
+
+
+def lazy_paginate(
+    iterator: Iterator[T],
+    offset: int,
+    count: int,
+    filter_fn: Optional[Callable[[T], bool]] = None,
+) -> Page[T]:
+    """Lazy pagination that only iterates over needed elements.
+
+    Much more efficient for large datasets when only fetching first pages.
+    Complexity: O(offset + count) instead of O(N) for full dataset.
+
+    Args:
+        iterator: An iterator over the data source
+        offset: Number of items to skip
+        count: Maximum number of items to return (0 for all remaining)
+        filter_fn: Optional filter function to apply before pagination
+
+    Returns:
+        Page with data and next_offset (None if no more items)
+    """
+    # Apply filter if provided
+    if filter_fn is not None:
+        iterator = filter(filter_fn, iterator)
+
+    # Skip offset items
+    if offset > 0:
+        iterator = islice(iterator, offset, None)
+
+    # Handle count=0 (all remaining items)
+    if count == 0:
+        items = list(iterator)
+        return {
+            "data": items,
+            "next_offset": None,
+        }
+
+    # Fetch count + 1 items to check if there are more
+    items = list(islice(iterator, count + 1))
+
+    has_more = len(items) > count
+    if has_more:
+        items = items[:count]
+
+    return {
+        "data": items,
+        "next_offset": offset + count if has_more else None,
     }
 
 
