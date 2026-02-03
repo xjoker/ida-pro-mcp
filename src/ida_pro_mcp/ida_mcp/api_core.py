@@ -130,7 +130,7 @@ def int_convert(
     ],
 ) -> list[dict]:
     """Convert numbers to different formats"""
-    inputs = normalize_dict_list(inputs, lambda s: {"text": s, "size": 64})
+    inputs = normalize_dict_list(inputs, lambda s: {"text": s})
 
     results = []
     for item in inputs:
@@ -201,7 +201,7 @@ def list_funcs(
 ) -> list[Page[Function]]:
     """List functions"""
     queries = normalize_dict_list(
-        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
+        queries, lambda s: {"offset": 0, "count": 100, "filter": s}
     )
     all_functions = [get_function(addr) for addr in idautils.Functions()]
 
@@ -231,7 +231,7 @@ def list_globals(
 ) -> list[Page[Global]]:
     """List globals"""
     queries = normalize_dict_list(
-        queries, lambda s: {"offset": 0, "count": 50, "filter": s}
+        queries, lambda s: {"offset": 0, "count": 100, "filter": s}
     )
     all_globals: list[Global] = []
     for addr, name in idautils.Names():
@@ -297,7 +297,15 @@ def find_regex(
         limit = 500
 
     matches = []
-    regex = re.compile(pattern, re.IGNORECASE)
+    try:
+        regex = re.compile(pattern, re.IGNORECASE)
+    except re.error as e:
+        return {
+            "n": 0,
+            "matches": [],
+            "cursor": {"done": True},
+            "error": f"Invalid regex pattern: {e}",
+        }
     strings = _get_strings_cache()
 
     skipped = 0

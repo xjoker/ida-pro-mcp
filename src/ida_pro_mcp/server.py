@@ -57,16 +57,12 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
         if id is None:
             return None  # Notification, no response needed
 
-        if sys.platform == "darwin":
-            shortcut = "Ctrl+Option+M"
-        else:
-            shortcut = "Ctrl+Alt+M"
         return JsonRpcResponse(
             {
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
-                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP ({shortcut}) to start the server?\n{full_info}",
+                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP Server to start the server?\n{full_info}",
                     "data": str(e),
                 },
                 "id": id,
@@ -720,7 +716,7 @@ def install_mcp_servers(*, stdio: bool = False, uninstall=False, quiet=False):
                 else:
                     json.dump(config, f, indent=2)
             os.replace(temp_path, config_path)
-        except:
+        except Exception:
             os.unlink(temp_path)
             raise
 

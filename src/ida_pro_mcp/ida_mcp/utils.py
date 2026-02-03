@@ -668,7 +668,10 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         return tif
     if tif.get_named_type(None, type_name, ida_typeinf.BTF_UNION):
         return tif
-    if tif := ida_typeinf.tinfo_t(type_name):
+
+    # Try parsing as a type string (e.g., "int *")
+    tif = ida_typeinf.tinfo_t()
+    if ida_typeinf.parse_decl(tif, None, f"{type_name} x;", ida_typeinf.PT_SIL):
         return tif
 
     raise IDAError(f"Unable to retrieve {type_name} type info object")
