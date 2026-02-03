@@ -33,15 +33,11 @@ class MCP(idaapi.plugin_t):
     comment = "MCP Plugin"
     help = "MCP Server for LLM-assisted reverse engineering"
     wanted_name = "MCP"
-    wanted_hotkey = "Ctrl-Alt-M"
+    wanted_hotkey = ""  # No hotkey, use Edit -> Plugins -> MCP
 
     def init(self):
-        hotkey = MCP.wanted_hotkey.replace("-", "+")
-        if __import__("sys").platform == "darwin":
-            hotkey = hotkey.replace("Alt", "Option")
-
         print(
-            f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
+            "[MCP] Plugin loaded, use Edit -> Plugins -> MCP to start the server"
         )
         self.mcp = None
         self._current_host = None
