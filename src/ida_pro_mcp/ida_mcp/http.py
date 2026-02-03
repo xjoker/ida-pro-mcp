@@ -19,20 +19,104 @@ from .rpc import (
 T = TypeVar("T")
 
 
+# 工具描述双语翻译 / Tool descriptions bilingual
+TOOL_DESCRIPTIONS = {
+    # Core functions
+    "idb_meta": ("Get IDB metadata", "获取 IDB 元数据"),
+    "lookup_funcs": ("Get functions by address or name", "通过地址或名称获取函数"),
+    "cursor_addr": ("Get current cursor address", "获取当前光标地址"),
+    "cursor_func": ("Get current function at cursor", "获取光标所在函数"),
+    "int_convert": ("Convert numbers between formats", "数字格式转换"),
+    "list_funcs": ("List functions with filtering", "列出函数（支持过滤）"),
+    "list_globals": ("List global variables", "列出全局变量"),
+    "imports": ("List imported symbols", "列出导入符号"),
+    "strings": ("List strings in binary", "列出二进制中的字符串"),
+    "segments": ("List memory segments", "列出内存段"),
+    "local_types": ("List local types", "列出本地类型"),
+    "entrypoints": ("Get entry points", "获取入口点"),
+
+    # Analysis
+    "decompile": ("Decompile function to pseudocode", "反编译函数为伪代码"),
+    "disasm": ("Disassemble function", "反汇编函数"),
+    "xrefs_to": ("Get cross-references to address", "获取到地址的交叉引用"),
+    "xrefs_to_field": ("Get xrefs to struct field", "获取到结构体字段的交叉引用"),
+    "callees": ("Get functions called by function", "获取函数调用的其他函数"),
+    "callers": ("Get functions calling this function", "获取调用此函数的函数"),
+    "analyze_funcs": ("Comprehensive function analysis", "全面的函数分析"),
+    "find_bytes": ("Search for byte patterns", "搜索字节模式"),
+    "find_insns": ("Search for instruction sequences", "搜索指令序列"),
+    "basic_blocks": ("Get control flow basic blocks", "获取控制流基本块"),
+    "find_paths": ("Find execution paths", "查找执行路径"),
+    "search": ("Search for patterns in binary", "在二进制中搜索模式"),
+    "find_insn_operands": ("Find instructions with operands", "查找带特定操作数的指令"),
+    "callgraph": ("Build call graph", "构建调用图"),
+    "xref_matrix": ("Build cross-reference matrix", "构建交叉引用矩阵"),
+    "analyze_strings": ("Analyze and filter strings", "分析和过滤字符串"),
+    "export_funcs": ("Export function data", "导出函数数据"),
+
+    # Memory
+    "get_bytes": ("Read bytes from memory", "从内存读取字节"),
+    "get_u8": ("Read 8-bit unsigned integer", "读取 8 位无符号整数"),
+    "get_u16": ("Read 16-bit unsigned integer", "读取 16 位无符号整数"),
+    "get_u32": ("Read 32-bit unsigned integer", "读取 32 位无符号整数"),
+    "get_u64": ("Read 64-bit unsigned integer", "读取 64 位无符号整数"),
+    "get_string": ("Read string from memory", "从内存读取字符串"),
+    "get_global_value": ("Read global variable value", "读取全局变量值"),
+    "patch": ("Patch bytes at address", "在地址处补丁字节"),
+
+    # Types
+    "declare_type": ("Declare C types", "声明 C 类型"),
+    "structs": ("List all structures", "列出所有结构体"),
+    "struct_info": ("Get structure info", "获取结构体信息"),
+    "read_struct": ("Read struct fields at address", "读取地址处的结构体字段"),
+    "search_structs": ("Search structures by name", "按名称搜索结构体"),
+    "apply_types": ("Apply types to entities", "应用类型到实体"),
+    "infer_types": ("Infer types at address", "推断地址处的类型"),
+
+    # Modify
+    "set_comments": ("Set comments at address", "在地址处设置注释"),
+    "patch_asm": ("Patch assembly instructions", "补丁汇编指令"),
+    "rename": ("Rename functions/variables", "重命名函数/变量"),
+
+    # Stack
+    "stack_frame": ("Get stack frame variables", "获取栈帧变量"),
+    "declare_stack": ("Create stack variable", "创建栈变量"),
+    "delete_stack": ("Delete stack variable", "删除栈变量"),
+
+    # Debug (unsafe)
+    "dbg_start": ("⚠️ Start debugger", "⚠️ 启动调试器"),
+    "dbg_exit": ("⚠️ Exit debugger", "⚠️ 退出调试器"),
+    "dbg_continue": ("⚠️ Continue execution", "⚠️ 继续执行"),
+    "dbg_run_to": ("⚠️ Run to address", "⚠️ 运行到地址"),
+    "dbg_step_into": ("⚠️ Step into instruction", "⚠️ 步入指令"),
+    "dbg_step_over": ("⚠️ Step over instruction", "⚠️ 步过指令"),
+    "dbg_list_bps": ("⚠️ List breakpoints", "⚠️ 列出断点"),
+    "dbg_add_bp": ("⚠️ Add breakpoint", "⚠️ 添加断点"),
+    "dbg_delete_bp": ("⚠️ Delete breakpoint", "⚠️ 删除断点"),
+    "dbg_enable_bp": ("⚠️ Enable/disable breakpoint", "⚠️ 启用/禁用断点"),
+    "dbg_regs": ("⚠️ Get all registers", "⚠️ 获取所有寄存器"),
+    "dbg_regs_thread": ("⚠️ Get thread registers", "⚠️ 获取线程寄存器"),
+    "dbg_regs_cur": ("⚠️ Get current thread registers", "⚠️ 获取当前线程寄存器"),
+    "dbg_gpregs_thread": ("⚠️ Get GP registers for thread", "⚠️ 获取线程通用寄存器"),
+    "dbg_current_gpregs": ("⚠️ Get current GP registers", "⚠️ 获取当前通用寄存器"),
+    "dbg_regs_for_thread": ("⚠️ Get specific thread registers", "⚠️ 获取特定线程寄存器"),
+    "dbg_current_regs": ("⚠️ Get specific current registers", "⚠️ 获取特定当前寄存器"),
+    "dbg_callstack": ("⚠️ Get call stack", "⚠️ 获取调用栈"),
+    "dbg_read_mem": ("⚠️ Read debug memory", "⚠️ 读取调试内存"),
+    "dbg_write_mem": ("⚠️ Write debug memory", "⚠️ 写入调试内存"),
+
+    # Python
+    "py_eval": ("⚠️ Execute Python code in IDA", "⚠️ 在 IDA 中执行 Python 代码"),
+}
+
 # 国际化文本 / Internationalization texts
 I18N = {
     "en": {
         "title": "IDA Pro MCP Config",
         "server_config": "Server Configuration",
         "host": "Host",
+        "host_hint": "0.0.0.0 = all interfaces, 127.0.0.1 = localhost only",
         "port": "Port",
-        "api_access": "API Access",
-        "unrestricted": "⛔ Unrestricted",
-        "unrestricted_tip": "Any website can make requests to this server. A malicious site you visit could access or modify your IDA database.",
-        "local": "🏠 Local apps only",
-        "local_tip": "Only web apps running on localhost can connect. Remote websites are blocked, but local development tools work.",
-        "direct": "🔒 Direct connections only",
-        "direct_tip": "Browser-based requests are blocked. Only direct clients like curl, MCP tools, or Claude Desktop can connect.",
         "enabled_tools": "Enabled Tools",
         "select": "Select",
         "all": "All",
@@ -50,20 +134,16 @@ I18N = {
         "auth_config": "Authentication",
         "auth_enabled": "Enable API Key Authentication",
         "api_key": "API Key",
-        "api_key_tip": "Leave empty to disable authentication. Use environment variable reference like ${IDA_MCP_API_KEY} for security.",
+        "api_key_tip": "Leave empty to disable. Use ${ENV_VAR} for environment variable.",
+        "tools_count": "tools enabled",
+        "unsafe_warning": "⚠️ = Unsafe tool (debugger/code execution)",
     },
     "zh": {
         "title": "IDA Pro MCP 配置",
         "server_config": "服务器配置",
         "host": "监听地址",
+        "host_hint": "0.0.0.0 = 所有接口，127.0.0.1 = 仅本地",
         "port": "端口",
-        "api_access": "API 访问策略",
-        "unrestricted": "⛔ 无限制",
-        "unrestricted_tip": "任何网站都可以向此服务器发送请求。您访问的恶意网站可能会访问或修改您的 IDA 数据库。",
-        "local": "🏠 仅本地应用",
-        "local_tip": "只有在 localhost 上运行的 Web 应用可以连接。远程网站被阻止，但本地开发工具可以正常工作。",
-        "direct": "🔒 仅直接连接",
-        "direct_tip": "阻止基于浏览器的请求。只有 curl、MCP 工具或 Claude Desktop 等直接客户端可以连接。",
         "enabled_tools": "已启用工具",
         "select": "选择",
         "all": "全部",
@@ -81,7 +161,9 @@ I18N = {
         "auth_config": "认证设置",
         "auth_enabled": "启用 API Key 认证",
         "api_key": "API Key",
-        "api_key_tip": "留空禁用认证。为安全起见，可使用环境变量引用，如 ${IDA_MCP_API_KEY}。",
+        "api_key_tip": "留空禁用。使用 ${环境变量} 引用环境变量。",
+        "tools_count": "个工具已启用",
+        "unsafe_warning": "⚠️ = 不安全工具（调试器/代码执行）",
     },
 }
 
@@ -131,7 +213,6 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
     return original_tools
 
 
-DEFAULT_CORS_POLICY = "local"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 13337
 
@@ -154,19 +235,6 @@ def set_server_config(config: dict):
     config_json_set("server_config", config)
 
 
-def get_cors_policy(port: int) -> str:
-    """Retrieve the current CORS policy from configuration."""
-    match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
-        case "unrestricted":
-            return "*"
-        case "local":
-            return "127.0.0.1 localhost"
-        case "direct":
-            return f"http://127.0.0.1:{port} http://localhost:{port}"
-        case _:
-            return "*"
-
-
 def get_language() -> str:
     """Get current language setting."""
     return config_json_get("language", "en")
@@ -185,6 +253,14 @@ def t(key: str, lang: str = None) -> str:
     return I18N.get(lang, I18N["en"]).get(key, key)
 
 
+def get_tool_description(name: str, lang: str) -> str:
+    """Get tool description in specified language."""
+    if name in TOOL_DESCRIPTIONS:
+        en_desc, zh_desc = TOOL_DESCRIPTIONS[name]
+        return zh_desc if lang == "zh" else en_desc
+    return name
+
+
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
 
 # Global reference to trigger server restart
@@ -200,16 +276,6 @@ def set_server_restart_callback(callback):
 class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def __init__(self, request, client_address, server):
         super().__init__(request, client_address, server)
-        self.update_cors_policy()
-
-    def update_cors_policy(self):
-        match config_json_get("cors_policy", DEFAULT_CORS_POLICY):
-            case "unrestricted":
-                self.mcp_server.cors_allowed_origins = "*"
-            case "local":
-                self.mcp_server.cors_allowed_origins = self.mcp_server.cors_localhost
-            case "direct":
-                self.mcp_server.cors_allowed_origins = None
 
     def do_POST(self):
         """Handles POST requests."""
@@ -326,7 +392,6 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
     def _handle_config_get(self):
         """Sends the configuration page with checkboxes."""
         # Get current settings
-        cors_policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
         server_config = get_server_config()
         lang = get_language()
 
@@ -338,6 +403,10 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
             if new_lang in I18N:
                 set_language(new_lang)
                 lang = new_lang
+
+        # Count enabled tools
+        enabled_count = len(self.mcp_server.tools.methods)
+        total_count = len(ORIGINAL_TOOLS)
 
         # Build HTML
         body = f"""<!DOCTYPE html>
@@ -434,6 +503,7 @@ h2 {{
   display: flex;
   gap: 1rem;
   align-items: center;
+  flex-wrap: wrap;
   padding: 0.75rem 1rem;
   background: var(--card-bg);
   border-radius: 8px;
@@ -447,15 +517,8 @@ h2 {{
   height: 10px;
   border-radius: 50%;
   margin-right: 0.5rem;
-}}
-
-.status-running {{
   background: var(--success);
   box-shadow: 0 0 6px var(--success);
-}}
-
-.status-stopped {{
-  background: #dc3545;
 }}
 
 .form-group {{
@@ -513,8 +576,7 @@ input[type="number"]:focus {{
   box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
 }}
 
-input[type="checkbox"],
-input[type="radio"] {{
+input[type="checkbox"] {{
   margin-right: 0.5rem;
   accent-color: var(--accent);
 }}
@@ -529,15 +591,6 @@ input[type="radio"] {{
   margin-top: 0.5rem;
 }}
 
-.btn-primary {{
-  background: var(--accent);
-  color: white;
-}}
-
-.btn-primary:hover {{
-  opacity: 0.9;
-}}
-
 .btn-success {{
   background: var(--success);
   color: white;
@@ -545,10 +598,6 @@ input[type="radio"] {{
 
 .btn-success:hover {{
   opacity: 0.9;
-}}
-
-.tooltip {{
-  border-bottom: 1px dotted var(--text);
 }}
 
 .hint {{
@@ -564,22 +613,52 @@ input[type="radio"] {{
 }}
 
 .tools-container {{
-  max-height: 400px;
+  max-height: 500px;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
   padding: 0.5rem;
 }}
 
+.tool-item {{
+  display: flex;
+  align-items: flex-start;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+}}
+
+.tool-item:hover {{
+  background: var(--hover);
+}}
+
+.tool-name {{
+  font-family: monospace;
+  font-weight: 500;
+  min-width: 180px;
+}}
+
+.tool-desc {{
+  color: #666;
+  font-size: 0.9rem;
+}}
+
+@media (prefers-color-scheme: dark) {{
+  .tool-desc {{
+    color: #999;
+  }}
+}}
+
 .quick-select {{
   font-size: 0.9rem;
   margin: 0.5rem 0;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
 }}
 
 .quick-select a {{
   color: var(--accent);
   text-decoration: none;
-  margin: 0 0.25rem;
 }}
 
 .quick-select a:hover {{
@@ -594,6 +673,17 @@ input[type="radio"] {{
   margin-bottom: 1rem;
   font-size: 0.9rem;
 }}
+
+.tools-header {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}}
+
+.tools-count {{
+  font-size: 0.9rem;
+  color: #666;
+}}
   </style>
   <script defer>
   function setTools(mode) {{
@@ -602,6 +692,12 @@ input[type="radio"] {{
         else if (mode === 'none') cb.checked = false;
         else if (mode === 'disable-unsafe' && cb.hasAttribute('data-unsafe')) cb.checked = false;
     }});
+    updateCount();
+  }}
+  function updateCount() {{
+    const checked = document.querySelectorAll('input[data-tool]:checked').length;
+    const total = document.querySelectorAll('input[data-tool]').length;
+    document.getElementById('tools-count').textContent = checked + '/' + total;
   }}
   </script>
 </head>
@@ -616,7 +712,7 @@ input[type="radio"] {{
 
 <div class="status-bar">
   <span>
-    <span class="status-indicator status-running"></span>
+    <span class="status-indicator"></span>
     <strong>{t("current_status", lang)}:</strong> {t("running", lang)}
   </span>
   <span>
@@ -636,7 +732,7 @@ input[type="radio"] {{
     <div class="form-group">
       <label class="form-label">{t("host", lang)}</label>
       <input type="text" name="host" value="{html.escape(str(server_config.get('host', DEFAULT_HOST)))}" placeholder="127.0.0.1">
-      <div class="hint">0.0.0.0 = all interfaces, 127.0.0.1 = localhost only</div>
+      <div class="hint">{t("host_hint", lang)}</div>
     </div>
     <div class="form-group">
       <label class="form-label">{t("port", lang)}</label>
@@ -660,40 +756,33 @@ input[type="radio"] {{
   </div>
 </div>
 
-<h2>{t("api_access", lang)}</h2>
-<div class="card">
-"""
-        cors_options = [
-            ("unrestricted", t("unrestricted", lang), t("unrestricted_tip", lang)),
-            ("local", t("local", lang), t("local_tip", lang)),
-            ("direct", t("direct", lang), t("direct_tip", lang)),
-        ]
-        for value, label, tooltip in cors_options:
-            checked = "checked" if cors_policy == value else ""
-            body += f'<label><input type="radio" name="cors_policy" value="{html.escape(value)}" {checked}><span class="tooltip" title="{html.escape(tooltip)}">{html.escape(label)}</span></label>'
+<div class="tools-header">
+  <h2>{t("enabled_tools", lang)}</h2>
+  <span class="tools-count"><span id="tools-count">{enabled_count}/{total_count}</span> {t("tools_count", lang)}</span>
+</div>
 
-        body += "</div>"
-
-        quick_select = f"""<div class="quick-select">
+<div class="quick-select">
   {t("select", lang)}:
   <a href="#" onclick="setTools('all'); return false;">{t("all", lang)}</a> ·
   <a href="#" onclick="setTools('none'); return false;">{t("none", lang)}</a> ·
   <a href="#" onclick="setTools('disable-unsafe'); return false;">{t("disable_unsafe", lang)}</a>
-</div>"""
+  <span style="margin-left: 1rem; color: #666; font-size: 0.85rem;">{t("unsafe_warning", lang)}</span>
+</div>
 
-        body += f"<h2>{t('enabled_tools', lang)}</h2>"
-        body += quick_select
-        body += '<div class="tools-container">'
+<div class="tools-container">
+"""
         for name, func in ORIGINAL_TOOLS.items():
-            description = (
-                (func.__doc__ or "No description").strip().splitlines()[0].strip()
-            )
-            unsafe_prefix = "⚠️ " if name in MCP_UNSAFE else ""
             checked = " checked" if name in self.mcp_server.tools.methods else ""
             unsafe_attr = " data-unsafe" if name in MCP_UNSAFE else ""
-            body += f"<label><input type='checkbox' name='{html.escape(name)}' value='{html.escape(name)}'{checked}{unsafe_attr} data-tool>{unsafe_prefix}{html.escape(name)}: {html.escape(description)}</label>"
+            description = get_tool_description(name, lang)
+
+            body += f"""<label class="tool-item">
+  <input type="checkbox" name="{html.escape(name)}" value="{html.escape(name)}"{checked}{unsafe_attr} data-tool onchange="updateCount()">
+  <span class="tool-name">{html.escape(name)}</span>
+  <span class="tool-desc">{html.escape(description)}</span>
+</label>
+"""
         body += "</div>"
-        body += quick_select
 
         body += f"""
 <div style="margin-top: 1.5rem;">
@@ -738,11 +827,6 @@ input[type="radio"] {{
             "api_key": api_key,
         }
         set_server_config(server_config)
-
-        # Update CORS policy
-        cors_policy = postvars.get("cors_policy", [DEFAULT_CORS_POLICY])[0]
-        config_json_set("cors_policy", cors_policy)
-        self.update_cors_policy()
 
         # Update the server's tools
         enabled_tools = {name: name in postvars for name in ORIGINAL_TOOLS.keys()}

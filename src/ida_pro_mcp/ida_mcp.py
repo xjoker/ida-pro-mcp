@@ -96,49 +96,55 @@ class MCP(idaapi.plugin_t):
                 print(f"[MCP] Error starting server: {e}")
 
     def _restart_server(self, new_host: str, new_port: int):
-        """Callback to restart the server with new configuration."""
-        print(f"[MCP] Restarting server on {new_host}:{new_port}...")
+        """Callback to restart the server with new configuration.
 
-        # Stop current server
-        if self.mcp:
-            try:
-                self.mcp.stop()
-            except Exception as e:
-                print(f"[MCP] Error stopping server: {e}")
-            self.mcp = None
+        This is called from a background thread, so we need to use
+        execute_sync to run the actual restart on IDA's main thread.
+        """
+        def do_restart():
+            print(f"[MCP] Restarting server on {new_host}:{new_port}...")
 
-        # Small delay to ensure port is released
-        import time
-        time.sleep(0.2)
+            # Stop current server
+            if self.mcp:
+                try:
+                    self.mcp.stop()
+                except Exception as e:
+                    print(f"[MCP] Error stopping server: {e}")
+                self.mcp = None
 
-        # Reload package and start new server
-        unload_package("ida_mcp")
+            # Reload package and start new server
+            unload_package("ida_mcp")
 
-        if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
-        else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
-
-        try:
-            init_caches()
-        except Exception as e:
-            print(f"[MCP] Cache init failed: {e}")
-
-        # Set restart callback
-        set_server_restart_callback(self._restart_server)
-
-        try:
-            MCP_SERVER.serve(new_host, new_port, request_handler=IdaMcpHttpRequestHandler)
-            self._current_host = new_host
-            self._current_port = new_port
-            print(f"[MCP] Server restarted on http://{new_host}:{new_port}")
-            print(f"  Config: http://{new_host}:{new_port}/config.html")
-            self.mcp = MCP_SERVER
-        except OSError as e:
-            if e.errno in (48, 98, 10048):
-                print(f"[MCP] Error: Port {new_port} is already in use")
+            if TYPE_CHECKING:
+                from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
             else:
-                print(f"[MCP] Error starting server: {e}")
+                from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
+
+            try:
+                init_caches()
+            except Exception as e:
+                print(f"[MCP] Cache init failed: {e}")
+
+            # Set restart callback
+            set_server_restart_callback(self._restart_server)
+
+            try:
+                MCP_SERVER.serve(new_host, new_port, request_handler=IdaMcpHttpRequestHandler)
+                self._current_host = new_host
+                self._current_port = new_port
+                print(f"[MCP] Server restarted on http://{new_host}:{new_port}")
+                print(f"  Config: http://{new_host}:{new_port}/config.html")
+                self.mcp = MCP_SERVER
+            except OSError as e:
+                if e.errno in (48, 98, 10048):
+                    print(f"[MCP] Error: Port {new_port} is already in use")
+                else:
+                    print(f"[MCP] Error starting server: {e}")
+
+            return 1  # Required for execute_sync callback
+
+        # Execute on IDA's main thread
+        idaapi.execute_sync(do_restart, idaapi.MFF_WRITE)
 
     def run(self, arg):
         """Toggle server on/off via menu."""
