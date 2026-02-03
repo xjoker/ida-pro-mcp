@@ -24,8 +24,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/mrexodia/ida-pro-mcp"
-Issues = "https://github.com/mrexodia/ida-pro-mcp/issues"
+Repository = "https://github.com/xjoker/ida-pro-mcp"
+Issues = "https://github.com/xjoker/ida-pro-mcp/issues"
 
 [build-system]
 requires = ["setuptools"]

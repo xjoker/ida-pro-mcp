@@ -21,7 +21,7 @@ uv run mcp dev src/ida_pro_mcp/server.py
 ### Installation
 ```bash
 # Install package + configure all MCP clients + install IDA plugin
-pip install https://github.com/mrexodia/ida-pro-mcp/archive/refs/heads/main.zip
+pip install https://github.com/xjoker/ida-pro-mcp/archive/refs/heads/main.zip
 ida-pro-mcp --install
 
 # Manual plugin install (creates symlinks or copies to IDA plugins folder)
