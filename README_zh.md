@@ -15,6 +15,36 @@
 - **菜单名称更改** - 插件菜单从 "MCP" 改为 "MCP Server"
 - **配置更改后自动重启** - 保存配置后服务器自动重启
 
+### API Key 认证配置
+
+启用 API Key 认证：
+
+1. 打开网页配置 `http://localhost:13337/config.html`
+2. 勾选"启用 API Key 认证"
+3. 输入 API Key（或使用 `${环境变量}` 引用环境变量）
+4. 保存并重启服务器
+
+**客户端配置示例：**
+
+```bash
+# Claude Code - 添加带 Bearer token 认证的 MCP 服务器
+claude mcp add --transport http ida-pro-mcp http://192.168.1.100:13337/mcp \
+  --header "Authorization: Bearer your-api-key-here"
+
+# 或在 ~/.claude.json 中手动配置：
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "type": "http",
+      "url": "http://192.168.1.100:13337/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
+
 ### Bug 修复
 
 - 修复服务器重启时 IDA 主线程崩溃问题

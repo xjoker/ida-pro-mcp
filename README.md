@@ -15,6 +15,36 @@ Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe 
 - **Menu Name Changed** - Plugin menu renamed from "MCP" to "MCP Server"
 - **Server Restart on Config Change** - Server automatically restarts after saving configuration
 
+### API Key Authentication
+
+To enable API Key authentication:
+
+1. Open the web configuration at `http://localhost:13337/config.html`
+2. Check "Enable API Key Authentication"
+3. Enter your API Key (or use `${ENV_VAR}` to reference an environment variable)
+4. Save and restart the server
+
+**Client Configuration Examples:**
+
+```bash
+# Claude Code - Add MCP server with Bearer token authentication
+claude mcp add --transport http ida-pro-mcp http://192.168.1.100:13337/mcp \
+  --header "Authorization: Bearer your-api-key-here"
+
+# Or configure in ~/.claude.json manually:
+{
+  "mcpServers": {
+    "ida-pro-mcp": {
+      "type": "http",
+      "url": "http://192.168.1.100:13337/mcp",
+      "headers": {
+        "Authorization": "Bearer your-api-key-here"
+      }
+    }
+  }
+}
+```
+
 ### Bug Fixes
 
 - Fixed IDA main thread crash when restarting server
