@@ -41,3 +41,8 @@ include = ["src/ida_pro_mcp"]
 
 [tool.ruff]
 exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.14",
+]
