@@ -1,5 +1,7 @@
 # IDA Pro MCP
 
+[中文文档](README_zh.md) | English
+
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
 ## Fork Version Updates

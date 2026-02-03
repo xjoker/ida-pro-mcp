@@ -1,5 +1,7 @@
 # IDA Pro MCP
 
+[English](README.md) | 中文文档
+
 简单的 [MCP 服务器](https://modelcontextprotocol.io/introduction)，支持在 IDA Pro 中进行 LLM 辅助逆向工程。
 
 ## Fork 版本更新
