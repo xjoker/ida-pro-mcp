@@ -19,6 +19,73 @@ from .rpc import (
 T = TypeVar("T")
 
 
+# 国际化文本 / Internationalization texts
+I18N = {
+    "en": {
+        "title": "IDA Pro MCP Config",
+        "server_config": "Server Configuration",
+        "host": "Host",
+        "port": "Port",
+        "api_access": "API Access",
+        "unrestricted": "⛔ Unrestricted",
+        "unrestricted_tip": "Any website can make requests to this server. A malicious site you visit could access or modify your IDA database.",
+        "local": "🏠 Local apps only",
+        "local_tip": "Only web apps running on localhost can connect. Remote websites are blocked, but local development tools work.",
+        "direct": "🔒 Direct connections only",
+        "direct_tip": "Browser-based requests are blocked. Only direct clients like curl, MCP tools, or Claude Desktop can connect.",
+        "enabled_tools": "Enabled Tools",
+        "select": "Select",
+        "all": "All",
+        "none": "None",
+        "disable_unsafe": "Disable unsafe",
+        "save": "Save",
+        "save_restart": "Save & Restart Server",
+        "language": "Language",
+        "server_will_restart": "Server will restart after saving configuration changes.",
+        "current_status": "Current Status",
+        "running": "Running",
+        "stopped": "Stopped",
+        "listening_on": "Listening on",
+        "config_saved": "Configuration saved. Server restarting...",
+        "auth_config": "Authentication",
+        "auth_enabled": "Enable API Key Authentication",
+        "api_key": "API Key",
+        "api_key_tip": "Leave empty to disable authentication. Use environment variable reference like ${IDA_MCP_API_KEY} for security.",
+    },
+    "zh": {
+        "title": "IDA Pro MCP 配置",
+        "server_config": "服务器配置",
+        "host": "监听地址",
+        "port": "端口",
+        "api_access": "API 访问策略",
+        "unrestricted": "⛔ 无限制",
+        "unrestricted_tip": "任何网站都可以向此服务器发送请求。您访问的恶意网站可能会访问或修改您的 IDA 数据库。",
+        "local": "🏠 仅本地应用",
+        "local_tip": "只有在 localhost 上运行的 Web 应用可以连接。远程网站被阻止，但本地开发工具可以正常工作。",
+        "direct": "🔒 仅直接连接",
+        "direct_tip": "阻止基于浏览器的请求。只有 curl、MCP 工具或 Claude Desktop 等直接客户端可以连接。",
+        "enabled_tools": "已启用工具",
+        "select": "选择",
+        "all": "全部",
+        "none": "无",
+        "disable_unsafe": "禁用不安全工具",
+        "save": "保存",
+        "save_restart": "保存并重启服务器",
+        "language": "语言",
+        "server_will_restart": "保存配置更改后服务器将重启。",
+        "current_status": "当前状态",
+        "running": "运行中",
+        "stopped": "已停止",
+        "listening_on": "监听地址",
+        "config_saved": "配置已保存。服务器正在重启...",
+        "auth_config": "认证设置",
+        "auth_enabled": "启用 API Key 认证",
+        "api_key": "API Key",
+        "api_key_tip": "留空禁用认证。为安全起见，可使用环境变量引用，如 ${IDA_MCP_API_KEY}。",
+    },
+}
+
+
 @idasync
 def config_json_get(key: str, default: T) -> T:
     node = ida_netnode.netnode(f"$ ida_mcp.{key}")
@@ -65,6 +132,26 @@ def handle_enabled_tools(registry: McpRpcRegistry, config_key: str):
 
 
 DEFAULT_CORS_POLICY = "local"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 13337
+
+
+def get_server_config() -> dict:
+    """Get server configuration from IDA database."""
+    return config_json_get(
+        "server_config",
+        {
+            "host": DEFAULT_HOST,
+            "port": DEFAULT_PORT,
+            "auth_enabled": False,
+            "api_key": None,
+        },
+    )
+
+
+def set_server_config(config: dict):
+    """Save server configuration to IDA database."""
+    config_json_set("server_config", config)
 
 
 def get_cors_policy(port: int) -> str:
@@ -80,7 +167,34 @@ def get_cors_policy(port: int) -> str:
             return "*"
 
 
+def get_language() -> str:
+    """Get current language setting."""
+    return config_json_get("language", "en")
+
+
+def set_language(lang: str):
+    """Set language preference."""
+    if lang in I18N:
+        config_json_set("language", lang)
+
+
+def t(key: str, lang: str = None) -> str:
+    """Get translated text for the given key."""
+    if lang is None:
+        lang = get_language()
+    return I18N.get(lang, I18N["en"]).get(key, key)
+
+
 ORIGINAL_TOOLS = handle_enabled_tools(MCP_SERVER.tools, "enabled_tools")
+
+# Global reference to trigger server restart
+_server_restart_callback = None
+
+
+def set_server_restart_callback(callback):
+    """Set callback function to restart the server."""
+    global _server_restart_callback
+    _server_restart_callback = callback
 
 
 class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
@@ -211,143 +325,365 @@ class IdaMcpHttpRequestHandler(McpHttpRequestHandler):
 
     def _handle_config_get(self):
         """Sends the configuration page with checkboxes."""
+        # Get current settings
         cors_policy = config_json_get("cors_policy", DEFAULT_CORS_POLICY)
+        server_config = get_server_config()
+        lang = get_language()
 
-        body = """<html>
+        # Get query parameter for language switch
+        parsed = urlparse(self.path)
+        query = parse_qs(parsed.query)
+        if "lang" in query:
+            new_lang = query["lang"][0]
+            if new_lang in I18N:
+                set_language(new_lang)
+                lang = new_lang
+
+        # Build HTML
+        body = f"""<!DOCTYPE html>
+<html lang="{lang}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IDA Pro MCP Config</title>
+  <title>{t("title", lang)}</title>
   <style>
-:root {
+:root {{
   --bg: #ffffff;
   --text: #1a1a1a;
   --border: #e0e0e0;
   --accent: #0066cc;
   --hover: #f5f5f5;
-}
+  --success: #28a745;
+  --warning: #ffc107;
+  --card-bg: #f8f9fa;
+}}
 
-@media (prefers-color-scheme: dark) {
-  :root {
+@media (prefers-color-scheme: dark) {{
+  :root {{
     --bg: #1a1a1a;
     --text: #e0e0e0;
     --border: #333333;
     --accent: #4da6ff;
     --hover: #2a2a2a;
-  }
-}
+    --success: #48bb78;
+    --warning: #ecc94b;
+    --card-bg: #242424;
+  }}
+}}
 
-* {
+* {{
   box-sizing: border-box;
-}
+}}
 
-body {
+body {{
   font-family: system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
-  max-width: 800px;
+  max-width: 900px;
   margin: 2rem auto;
   padding: 1rem;
-  line-height: 1.4;
-}
+  line-height: 1.5;
+}}
 
-h1 {
+h1 {{
   font-size: 1.5rem;
-  margin-bottom: 1rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.5rem;
-}
+  margin-bottom: 0.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}}
 
-h2 {
+h2 {{
   font-size: 1.1rem;
   margin-top: 1.5rem;
-  margin-bottom: 0.5rem;
-}
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}}
 
-label {
+.lang-switch {{
+  font-size: 0.9rem;
+  font-weight: normal;
+}}
+
+.lang-switch a {{
+  color: var(--accent);
+  text-decoration: none;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}}
+
+.lang-switch a:hover {{
+  background: var(--hover);
+}}
+
+.lang-switch a.active {{
+  background: var(--accent);
+  color: white;
+}}
+
+.card {{
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}}
+
+.status-bar {{
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: var(--card-bg);
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}}
+
+.status-indicator {{
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 0.5rem;
+}}
+
+.status-running {{
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}}
+
+.status-stopped {{
+  background: #dc3545;
+}}
+
+.form-group {{
+  margin-bottom: 1rem;
+}}
+
+.form-row {{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}}
+
+@media (max-width: 600px) {{
+  .form-row {{
+    grid-template-columns: 1fr;
+  }}
+}}
+
+label {{
   display: block;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
   cursor: pointer;
-}
+}}
 
-label:hover {
+label:hover {{
   background: var(--hover);
-}
+}}
+
+label.form-label {{
+  font-weight: 500;
+  margin-bottom: 0.25rem;
+  padding: 0;
+}}
+
+label.form-label:hover {{
+  background: transparent;
+}}
+
+input[type="text"],
+input[type="number"] {{
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 1rem;
+}}
+
+input[type="text"]:focus,
+input[type="number"]:focus {{
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.2);
+}}
 
 input[type="checkbox"],
-input[type="radio"] {
+input[type="radio"] {{
   margin-right: 0.5rem;
   accent-color: var(--accent);
-}
+}}
 
-input[type="submit"] {
-  margin-top: 1rem;
+.btn {{
   padding: 0.6rem 1.5rem;
-  background: var(--accent);
-  color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 1rem;
-}
+  margin-right: 0.5rem;
+  margin-top: 0.5rem;
+}}
 
-input[type="submit"]:hover {
+.btn-primary {{
+  background: var(--accent);
+  color: white;
+}}
+
+.btn-primary:hover {{
   opacity: 0.9;
-}
+}}
 
-.tooltip {
+.btn-success {{
+  background: var(--success);
+  color: white;
+}}
+
+.btn-success:hover {{
+  opacity: 0.9;
+}}
+
+.tooltip {{
   border-bottom: 1px dotted var(--text);
-}
+}}
+
+.hint {{
+  font-size: 0.85rem;
+  color: #666;
+  margin-top: 0.25rem;
+}}
+
+@media (prefers-color-scheme: dark) {{
+  .hint {{
+    color: #999;
+  }}
+}}
+
+.tools-container {{
+  max-height: 400px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.5rem;
+}}
+
+.quick-select {{
+  font-size: 0.9rem;
+  margin: 0.5rem 0;
+}}
+
+.quick-select a {{
+  color: var(--accent);
+  text-decoration: none;
+  margin: 0 0.25rem;
+}}
+
+.quick-select a:hover {{
+  text-decoration: underline;
+}}
+
+.notice {{
+  padding: 0.75rem 1rem;
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid var(--warning);
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}}
   </style>
   <script defer>
-  function setTools(mode) {
-    document.querySelectorAll('input[data-tool]').forEach(cb => {
+  function setTools(mode) {{
+    document.querySelectorAll('input[data-tool]').forEach(cb => {{
         if (mode === 'all') cb.checked = true;
         else if (mode === 'none') cb.checked = false;
         else if (mode === 'disable-unsafe' && cb.hasAttribute('data-unsafe')) cb.checked = false;
-    });
-  }
+    }});
+  }}
   </script>
 </head>
 <body>
-<h1>IDA Pro MCP Config</h1>
+<h1>
+  {t("title", lang)}
+  <span class="lang-switch">
+    <a href="?lang=en" class="{'active' if lang == 'en' else ''}">EN</a>
+    <a href="?lang=zh" class="{'active' if lang == 'zh' else ''}">中文</a>
+  </span>
+</h1>
+
+<div class="status-bar">
+  <span>
+    <span class="status-indicator status-running"></span>
+    <strong>{t("current_status", lang)}:</strong> {t("running", lang)}
+  </span>
+  <span>
+    <strong>{t("listening_on", lang)}:</strong> {server_config.get("host", DEFAULT_HOST)}:{server_config.get("port", DEFAULT_PORT)}
+  </span>
+</div>
 
 <form method="post" action="/config">
 
-<h2>API Access</h2>
+<div class="notice">
+  ⚠️ {t("server_will_restart", lang)}
+</div>
+
+<h2>{t("server_config", lang)}</h2>
+<div class="card">
+  <div class="form-row">
+    <div class="form-group">
+      <label class="form-label">{t("host", lang)}</label>
+      <input type="text" name="host" value="{html.escape(str(server_config.get('host', DEFAULT_HOST)))}" placeholder="127.0.0.1">
+      <div class="hint">0.0.0.0 = all interfaces, 127.0.0.1 = localhost only</div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">{t("port", lang)}</label>
+      <input type="number" name="port" value="{server_config.get('port', DEFAULT_PORT)}" min="1" max="65535">
+    </div>
+  </div>
+</div>
+
+<h2>{t("auth_config", lang)}</h2>
+<div class="card">
+  <div class="form-group">
+    <label>
+      <input type="checkbox" name="auth_enabled" value="1" {'checked' if server_config.get('auth_enabled') else ''}>
+      {t("auth_enabled", lang)}
+    </label>
+  </div>
+  <div class="form-group">
+    <label class="form-label">{t("api_key", lang)}</label>
+    <input type="text" name="api_key" value="{html.escape(str(server_config.get('api_key') or ''))}" placeholder="${{IDA_MCP_API_KEY}}">
+    <div class="hint">{t("api_key_tip", lang)}</div>
+  </div>
+</div>
+
+<h2>{t("api_access", lang)}</h2>
+<div class="card">
 """
         cors_options = [
-            (
-                "unrestricted",
-                "⛔ Unrestricted",
-                "Any website can make requests to this server. A malicious site you visit could access or modify your IDA database.",
-            ),
-            (
-                "local",
-                "🏠 Local apps only",
-                "Only web apps running on localhost can connect. Remote websites are blocked, but local development tools work.",
-            ),
-            (
-                "direct",
-                "🔒 Direct connections only",
-                "Browser-based requests are blocked. Only direct clients like curl, MCP tools, or Claude Desktop can connect.",
-            ),
+            ("unrestricted", t("unrestricted", lang), t("unrestricted_tip", lang)),
+            ("local", t("local", lang), t("local_tip", lang)),
+            ("direct", t("direct", lang), t("direct_tip", lang)),
         ]
         for value, label, tooltip in cors_options:
             checked = "checked" if cors_policy == value else ""
             body += f'<label><input type="radio" name="cors_policy" value="{html.escape(value)}" {checked}><span class="tooltip" title="{html.escape(tooltip)}">{html.escape(label)}</span></label>'
-        body += "<br><input type='submit' value='Save'>"
 
-        quick_select = """<p style="font-size: 0.9rem; margin: 0.5rem 0;">
-  Select:
-  <a href="#" onclick="setTools('all'); return false;">All</a> ·
-  <a href="#" onclick="setTools('none'); return false;">None</a> ·
-  <a href="#" onclick="setTools('disable-unsafe'); return false;">Disable unsafe</a>
-</p>"""
+        body += "</div>"
 
-        body += "<h2>Enabled Tools</h2>"
+        quick_select = f"""<div class="quick-select">
+  {t("select", lang)}:
+  <a href="#" onclick="setTools('all'); return false;">{t("all", lang)}</a> ·
+  <a href="#" onclick="setTools('none'); return false;">{t("none", lang)}</a> ·
+  <a href="#" onclick="setTools('disable-unsafe'); return false;">{t("disable_unsafe", lang)}</a>
+</div>"""
+
+        body += f"<h2>{t('enabled_tools', lang)}</h2>"
         body += quick_select
+        body += '<div class="tools-container">'
         for name, func in ORIGINAL_TOOLS.items():
             description = (
                 (func.__doc__ or "No description").strip().splitlines()[0].strip()
@@ -356,9 +692,17 @@ input[type="submit"]:hover {
             checked = " checked" if name in self.mcp_server.tools.methods else ""
             unsafe_attr = " data-unsafe" if name in MCP_UNSAFE else ""
             body += f"<label><input type='checkbox' name='{html.escape(name)}' value='{html.escape(name)}'{checked}{unsafe_attr} data-tool>{unsafe_prefix}{html.escape(name)}: {html.escape(description)}</label>"
+        body += "</div>"
         body += quick_select
-        body += "<br><input type='submit' value='Save'>"
-        body += "</form></body></html>"
+
+        body += f"""
+<div style="margin-top: 1.5rem;">
+  <button type="submit" class="btn btn-success">{t("save_restart", lang)}</button>
+</div>
+
+</form>
+</body>
+</html>"""
         self._send_html(200, body)
 
     def _handle_config_post(self):
@@ -372,6 +716,28 @@ input[type="submit"]:hover {
         # Parse the form data
         length = int(self.headers.get("content-length", "0"))
         postvars = parse_qs(self.rfile.read(length).decode("utf-8"))
+
+        # Update server configuration
+        new_host = postvars.get("host", [DEFAULT_HOST])[0].strip() or DEFAULT_HOST
+        try:
+            new_port = int(postvars.get("port", [DEFAULT_PORT])[0])
+            if not (1 <= new_port <= 65535):
+                new_port = DEFAULT_PORT
+        except (ValueError, TypeError):
+            new_port = DEFAULT_PORT
+
+        auth_enabled = "auth_enabled" in postvars
+        api_key = postvars.get("api_key", [None])[0]
+        if api_key:
+            api_key = api_key.strip() or None
+
+        server_config = {
+            "host": new_host,
+            "port": new_port,
+            "auth_enabled": auth_enabled,
+            "api_key": api_key,
+        }
+        set_server_config(server_config)
 
         # Update CORS policy
         cors_policy = postvars.get("cors_policy", [DEFAULT_CORS_POLICY])[0]
@@ -387,7 +753,23 @@ input[type="submit"]:hover {
         }
         config_json_set("enabled_tools", enabled_tools)
 
-        # Redirect back to the config page
+        # Trigger server restart if callback is set
+        if _server_restart_callback:
+            try:
+                # Schedule restart after response is sent
+                import threading
+
+                def delayed_restart():
+                    import time
+
+                    time.sleep(0.5)  # Wait for response to be sent
+                    _server_restart_callback(new_host, new_port)
+
+                threading.Thread(target=delayed_restart, daemon=True).start()
+            except Exception as e:
+                print(f"[MCP] Failed to schedule server restart: {e}")
+
+        # Redirect back to the config page (will use new port after restart)
         self.send_response(302)
-        self.send_header("Location", "/config.html")
+        self.send_header("Location", f"http://{new_host}:{new_port}/config.html")
         self.end_headers()

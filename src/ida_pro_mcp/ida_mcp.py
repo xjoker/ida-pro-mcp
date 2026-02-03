@@ -3,10 +3,10 @@
 This file serves as the entry point for IDA Pro's plugin system.
 It loads the actual implementation from the ida_mcp package.
 
-Supports:
-- Multiple server instances with different hosts/ports
-- API Key authentication
-- Native IDA configuration UI (Ctrl+Shift+M)
+Features:
+- Web-based configuration at http://host:port/config.html
+- Bilingual interface (English/中文)
+- Server restart on config change
 """
 
 import sys
@@ -43,117 +43,100 @@ class MCP(idaapi.plugin_t):
         print(
             f"[MCP] Plugin loaded, use Edit -> Plugins -> MCP ({hotkey}) to start the server"
         )
-        print("[MCP] Use Ctrl+Shift+M to open configuration dialog")
-
-        self._server_manager = None
-        self._ui_registered = False
-        self._mcp_server = None
-
+        self.mcp = None
+        self._current_host = None
+        self._current_port = None
         return idaapi.PLUGIN_KEEP
 
-    def _ensure_loaded(self):
-        """Ensure ida_mcp package is loaded and return required modules."""
-        # HACK: ensure fresh load of ida_mcp package
+    def _restart_server(self, new_host: str, new_port: int):
+        """Callback to restart the server with new configuration."""
+        print(f"[MCP] Restarting server on {new_host}:{new_port}...")
+
+        # Stop current server
+        if self.mcp:
+            try:
+                self.mcp.stop()
+            except Exception as e:
+                print(f"[MCP] Error stopping server: {e}")
+            self.mcp = None
+
+        # Small delay to ensure port is released
+        import time
+        time.sleep(0.2)
+
+        # Reload package and start new server
         unload_package("ida_mcp")
 
         if TYPE_CHECKING:
-            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches
-            from .ida_mcp.config import get_config, ServerInstanceConfig
-            from .ida_mcp.server_manager import get_server_manager
-            from .ida_mcp.ui import register_actions, show_config_dialog
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
         else:
-            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches
-            from ida_mcp.config import get_config, ServerInstanceConfig
-            from ida_mcp.server_manager import get_server_manager
-            from ida_mcp.ui import register_actions, show_config_dialog
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
 
-        return {
-            "MCP_SERVER": MCP_SERVER,
-            "IdaMcpHttpRequestHandler": IdaMcpHttpRequestHandler,
-            "init_caches": init_caches,
-            "get_config": get_config,
-            "ServerInstanceConfig": ServerInstanceConfig,
-            "get_server_manager": get_server_manager,
-            "register_actions": register_actions,
-            "show_config_dialog": show_config_dialog,
-        }
-
-    def run(self, arg):
-        modules = self._ensure_loaded()
-
-        MCP_SERVER = modules["MCP_SERVER"]
-        IdaMcpHttpRequestHandler = modules["IdaMcpHttpRequestHandler"]
-        init_caches = modules["init_caches"]
-        get_config = modules["get_config"]
-        ServerInstanceConfig = modules["ServerInstanceConfig"]
-        get_server_manager = modules["get_server_manager"]
-        register_actions = modules["register_actions"]
-
-        # Register UI actions if not already done
-        if not self._ui_registered:
-            register_actions()
-            self._ui_registered = True
-
-        # Initialize caches
         try:
             init_caches()
         except Exception as e:
             print(f"[MCP] Cache init failed: {e}")
 
-        # Get server manager and config
-        manager = get_server_manager()
-        config = get_config()
+        # Set restart callback
+        set_server_restart_callback(self._restart_server)
 
-        # Set up server factory
-        def create_server():
-            return MCP_SERVER
+        try:
+            MCP_SERVER.serve(new_host, new_port, request_handler=IdaMcpHttpRequestHandler)
+            self._current_host = new_host
+            self._current_port = new_port
+            print(f"[MCP] Server restarted on http://{new_host}:{new_port}")
+            print(f"  Config: http://{new_host}:{new_port}/config.html")
+            self.mcp = MCP_SERVER
+        except OSError as e:
+            if e.errno in (48, 98, 10048):
+                print(f"[MCP] Error: Port {new_port} is already in use")
+            else:
+                print(f"[MCP] Error starting server: {e}")
 
-        manager.set_server_factory(create_server)
-        manager.set_request_handler(IdaMcpHttpRequestHandler)
+    def run(self, arg):
+        # Toggle server on/off
+        if self.mcp:
+            self.mcp.stop()
+            self.mcp = None
+            print("[MCP] Server stopped")
+            return
 
-        # Load servers from config
-        if len(manager) == 0:
-            manager.load_from_config(config)
+        # HACK: ensure fresh load of ida_mcp package
+        unload_package("ida_mcp")
+        if TYPE_CHECKING:
+            from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback, get_server_config
+        else:
+            from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback, get_server_config
 
-        # If no servers configured, add a default one
-        if len(manager) == 0:
-            default_config = ServerInstanceConfig(
-                instance_id="local",
-                host="127.0.0.1",
-                port=13337,
-            )
-            manager.add_server(default_config)
+        try:
+            init_caches()
+        except Exception as e:
+            print(f"[MCP] Cache init failed: {e}")
 
-        # Start the first server (or all auto-start servers)
-        started = manager.start_auto_servers()
-        if started == 0:
-            # No auto-start servers, start the first one
-            status = manager.get_status()
-            if status:
-                first_id = list(status.keys())[0]
-                instance = manager.get_instance(first_id)
-                if instance and not instance.is_running:
-                    if manager.start_server(first_id):
-                        print(f"  Config: http://{instance.config.host}:{instance.config.port}/config.html")
+        # Set restart callback for web config
+        set_server_restart_callback(self._restart_server)
 
-        self._server_manager = manager
-        self._mcp_server = MCP_SERVER
+        # Get server config from IDA database
+        server_config = get_server_config()
+        host = server_config.get("host", "127.0.0.1")
+        port = server_config.get("port", 13337)
+
+        try:
+            MCP_SERVER.serve(host, port, request_handler=IdaMcpHttpRequestHandler)
+            self._current_host = host
+            self._current_port = port
+            print(f"[MCP] Server started on http://{host}:{port}")
+            print(f"  Config: http://{host}:{port}/config.html")
+            self.mcp = MCP_SERVER
+        except OSError as e:
+            if e.errno in (48, 98, 10048):
+                print(f"[MCP] Error: Port {port} is already in use")
+            else:
+                raise
 
     def term(self):
-        if self._server_manager:
-            self._server_manager.stop_all()
-            self._server_manager = None
-
-        if self._ui_registered:
-            try:
-                if TYPE_CHECKING:
-                    from .ida_mcp.ui import unregister_actions
-                else:
-                    from ida_mcp.ui import unregister_actions
-                unregister_actions()
-            except ImportError:
-                pass
-            self._ui_registered = False
+        if self.mcp:
+            self.mcp.stop()
 
 
 def PLUGIN_ENTRY():
