@@ -2,6 +2,29 @@
 
 Simple [MCP Server](https://modelcontextprotocol.io/introduction) to allow vibe reversing in IDA Pro.
 
+## Fork Version Updates
+
+> This is a fork of [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) with the following enhancements:
+
+### New Features
+
+- **Web Configuration Interface** - Access `http://localhost:13337/config.html` for bilingual (English/中文) settings
+- **Server Configuration** - Configure host, port, and API Key authentication via web UI
+- **Auto-start on IDA Launch** - MCP server starts automatically when IDA loads a database
+- **No Keyboard Shortcut Occupation** - Removed all hotkey bindings, menu-only activation
+- **Menu Name Changed** - Plugin menu renamed from "MCP" to "MCP Server"
+- **Server Restart on Config Change** - Server automatically restarts after saving configuration
+
+### Bug Fixes
+
+- Fixed IDA main thread crash when restarting server
+- Fixed walrus operator logic error in type parsing
+- Added regex compilation exception handling
+- Fixed bare `except:` statements
+- Unified default pagination count values
+
+---
+
 https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
 
 The binaries and prompt for the video are available in the [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) repository.

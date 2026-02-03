@@ -2,6 +2,29 @@
 
 简单的 [MCP 服务器](https://modelcontextprotocol.io/introduction)，支持在 IDA Pro 中进行 LLM 辅助逆向工程。
 
+## Fork 版本更新
+
+> 这是 [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) 的 fork 版本，包含以下增强功能：
+
+### 新功能
+
+- **Web 配置界面** - 访问 `http://localhost:13337/config.html` 进行中英文双语配置
+- **服务器配置** - 通过网页配置监听地址、端口和 API Key 认证
+- **IDA 启动自动加载** - IDA 加载数据库后自动启动 MCP 服务器
+- **无快捷键占用** - 移除所有快捷键绑定，仅通过菜单激活
+- **菜单名称更改** - 插件菜单从 "MCP" 改为 "MCP Server"
+- **配置更改后自动重启** - 保存配置后服务器自动重启
+
+### Bug 修复
+
+- 修复服务器重启时 IDA 主线程崩溃问题
+- 修复类型解析中 walrus operator 逻辑错误
+- 添加正则表达式编译异常处理
+- 修复裸 `except:` 语句
+- 统一分页默认 count 值
+
+---
+
 https://github.com/user-attachments/assets/6ebeaa92-a9db-43fa-b756-eececce2aca0
 
 演示视频中使用的二进制文件和提示词可在 [mcp-reversing-dataset](https://github.com/mrexodia/mcp-reversing-dataset) 仓库中获取。
