@@ -1,7 +1,7 @@
 [project]
-name = "ida-pro-mcp"
-version = "2.0.0"
-description = "Vibe reversing with IDA Pro"
+name = "ida-pro-mcp-xjoker"
+version = "1.0.1"
+description = "Vibe reversing with IDA Pro (enhanced fork)"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -45,4 +45,15 @@ exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
 [dependency-groups]
 dev = [
     "ruff>=0.14.14",
+    "commitizen>=4.0.0",
 ]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "1.0.1"
+version_files = [
+    "pyproject.toml:^version"
+]
+tag_format = "v$version"
+update_changelog_on_bump = true
+changelog_file = "CHANGELOG.md"

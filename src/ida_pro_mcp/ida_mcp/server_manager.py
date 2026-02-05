@@ -13,6 +13,7 @@ from typing import Optional, Callable, TYPE_CHECKING
 
 from .config import ServerInstanceConfig, McpConfig, get_config, save_config
 from .auth import AuthMiddleware
+from .port_utils import try_serve_with_port_retry
 
 if TYPE_CHECKING:
     from .zeromcp.mcp import McpServer
@@ -28,6 +29,14 @@ class ServerInstance:
     server: Optional["McpServer"] = None
     auth: AuthMiddleware = field(default_factory=AuthMiddleware)
     error: Optional[str] = None
+    _actual_port: Optional[int] = field(default=None, repr=False)
+
+    @property
+    def actual_port(self) -> int:
+        """实际绑定的端口（可能因端口冲突自动递增）。"""
+        if self._actual_port is not None:
+            return self._actual_port
+        return self.config.port
 
     @property
     def is_running(self) -> bool:
@@ -42,7 +51,7 @@ class ServerInstance:
         return "stopped"
 
     def to_status_dict(self) -> dict:
-        return {
+        result = {
             "instance_id": self.config.instance_id,
             "host": self.config.host,
             "port": self.config.port,
@@ -50,6 +59,10 @@ class ServerInstance:
             "auth_enabled": self.config.auth_enabled,
             "address": self.config.address,
         }
+        if self._actual_port is not None and self._actual_port != self.config.port:
+            result["actual_port"] = self._actual_port
+            result["address"] = f"{self.config.host}:{self._actual_port}"
+        return result
 
 
 class ServerManager:
@@ -157,24 +170,37 @@ class ServerManager:
                 if hasattr(server, '_auth'):
                     server._auth = instance.auth
 
-                # Start the server
+                # Start the server with port retry
                 kwargs = {}
                 if self._request_handler_class:
                     kwargs["request_handler"] = self._request_handler_class
 
-                server.serve(instance.config.host, instance.config.port, **kwargs)
+                actual_port, failed_ports = try_serve_with_port_retry(
+                    server,
+                    instance.config.host,
+                    instance.config.port,
+                    **kwargs,
+                )
 
                 instance.server = server
                 instance.error = None
+                instance._actual_port = actual_port if actual_port != instance.config.port else None
 
+                if failed_ports:
+                    logger.info(
+                        f"Server '{instance_id}': port {instance.config.port} in use, "
+                        f"auto-selected port {actual_port}"
+                    )
                 logger.info(
-                    f"Started server '{instance_id}' on {instance.config.address}"
+                    f"Started server '{instance_id}' on {instance.config.host}:{actual_port}"
                 )
                 return True
 
             except OSError as e:
                 if e.errno in (48, 98, 10048):  # Address already in use
-                    instance.error = f"Port {instance.config.port} is already in use"
+                    instance.error = (
+                        f"All ports {instance.config.port}-{instance.config.port + 9} are in use"
+                    )
                 else:
                     instance.error = str(e)
                 logger.error(f"Failed to start server '{instance_id}': {instance.error}")

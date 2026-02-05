@@ -66,8 +66,12 @@ class MCP(idaapi.plugin_t):
         unload_package("ida_mcp")
         if TYPE_CHECKING:
             from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback, get_server_config
+            from .ida_mcp.port_utils import try_serve_with_port_retry, format_port_exhausted_message
+            from .ida_mcp.rpc import set_download_base_url
         else:
             from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback, get_server_config
+            from ida_mcp.port_utils import try_serve_with_port_retry, format_port_exhausted_message
+            from ida_mcp.rpc import set_download_base_url
 
         try:
             init_caches()
@@ -83,15 +87,20 @@ class MCP(idaapi.plugin_t):
         port = server_config.get("port", 13337)
 
         try:
-            MCP_SERVER.serve(host, port, request_handler=IdaMcpHttpRequestHandler)
+            actual_port, failed_ports = try_serve_with_port_retry(
+                MCP_SERVER, host, port, request_handler=IdaMcpHttpRequestHandler
+            )
+            if failed_ports:
+                print(f"[MCP] Port {port} was in use, auto-selected port {actual_port}")
             self._current_host = host
-            self._current_port = port
-            print(f"[MCP] Server started on http://{host}:{port}")
-            print(f"  Config: http://{host}:{port}/config.html")
+            self._current_port = actual_port
             self.mcp = MCP_SERVER
+            set_download_base_url(f"http://{host}:{actual_port}")
+            print(f"[MCP] Server started on http://{host}:{actual_port}")
+            print(f"  Config: http://{host}:{actual_port}/config.html")
         except OSError as e:
             if e.errno in (48, 98, 10048):
-                print(f"[MCP] Error: Port {port} is already in use")
+                print(format_port_exhausted_message(host, port, list(range(port, port + 10))))
             else:
                 print(f"[MCP] Error starting server: {e}")
 
@@ -117,8 +126,12 @@ class MCP(idaapi.plugin_t):
 
             if TYPE_CHECKING:
                 from .ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
+                from .ida_mcp.port_utils import try_serve_with_port_retry, format_port_exhausted_message
+                from .ida_mcp.rpc import set_download_base_url
             else:
                 from ida_mcp import MCP_SERVER, IdaMcpHttpRequestHandler, init_caches, set_server_restart_callback
+                from ida_mcp.port_utils import try_serve_with_port_retry, format_port_exhausted_message
+                from ida_mcp.rpc import set_download_base_url
 
             try:
                 init_caches()
@@ -129,15 +142,20 @@ class MCP(idaapi.plugin_t):
             set_server_restart_callback(self._restart_server)
 
             try:
-                MCP_SERVER.serve(new_host, new_port, request_handler=IdaMcpHttpRequestHandler)
+                actual_port, failed_ports = try_serve_with_port_retry(
+                    MCP_SERVER, new_host, new_port, request_handler=IdaMcpHttpRequestHandler
+                )
+                if failed_ports:
+                    print(f"[MCP] Port {new_port} was in use, auto-selected port {actual_port}")
                 self._current_host = new_host
-                self._current_port = new_port
-                print(f"[MCP] Server restarted on http://{new_host}:{new_port}")
-                print(f"  Config: http://{new_host}:{new_port}/config.html")
+                self._current_port = actual_port
                 self.mcp = MCP_SERVER
+                set_download_base_url(f"http://{new_host}:{actual_port}")
+                print(f"[MCP] Server restarted on http://{new_host}:{actual_port}")
+                print(f"  Config: http://{new_host}:{actual_port}/config.html")
             except OSError as e:
                 if e.errno in (48, 98, 10048):
-                    print(f"[MCP] Error: Port {new_port} is already in use")
+                    print(format_port_exhausted_message(new_host, new_port, list(range(new_port, new_port + 10))))
                 else:
                     print(f"[MCP] Error starting server: {e}")
 

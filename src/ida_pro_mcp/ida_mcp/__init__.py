@@ -15,6 +15,7 @@ Architecture:
 from . import rpc
 from . import sync
 from . import utils
+from . import port_utils
 
 # Import all API modules to register @tool functions and @resource functions
 from . import api_core
@@ -30,7 +31,7 @@ from . import api_resources
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
 from .rpc import MCP_SERVER, MCP_UNSAFE, tool, unsafe, resource
-from .http import IdaMcpHttpRequestHandler, set_server_restart_callback, get_server_config
+from .http import IdaMcpHttpRequestHandler, set_server_restart_callback, get_server_config, set_server_config
 from .api_core import init_caches
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "rpc",
     "sync",
     "utils",
+    "port_utils",
     # API modules
     "api_core",
     "api_analysis",
@@ -61,5 +63,6 @@ __all__ = [
     "IdaMcpHttpRequestHandler",
     "set_server_restart_callback",
     "get_server_config",
+    "set_server_config",
     "init_caches",
 ]
