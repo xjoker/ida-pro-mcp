@@ -11,7 +11,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, Callable, TYPE_CHECKING
 
-from .config import ServerInstanceConfig, McpConfig, get_config, save_config
+from .config import ServerInstanceConfig, McpConfig, get_config
 from .auth import AuthMiddleware
 from .port_utils import try_serve_with_port_retry
 

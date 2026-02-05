@@ -10,7 +10,6 @@ from typing import Optional, TYPE_CHECKING
 
 from .config import (
     ServerInstanceConfig,
-    McpConfig,
     get_config,
     save_config,
     reload_config,
@@ -34,9 +33,9 @@ class ServerConfigForm(idaapi.Form):
         instance_id = "" if is_new else config.instance_id
         host = "127.0.0.1" if is_new else config.host
         port = 13337 if is_new else config.port
-        auth_enabled = False if is_new else config.auth_enabled
+        _ = False if is_new else config.auth_enabled  # Reserved for future use
         api_key = "" if is_new else (config.api_key or "")
-        auto_start = False if is_new else config.auto_start
+        _ = False if is_new else config.auto_start  # Reserved for future use
 
         form_template = r"""STARTITEM 0
 BUTTON YES* Save

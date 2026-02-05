@@ -145,7 +145,7 @@ def test_resource_struct_name():
 def test_resource_struct_name_not_found():
     """struct_name_resource handles non-existent structure"""
     try:
-        result = struct_name_resource("NonExistentStruct12345")
+        struct_name_resource("NonExistentStruct12345")
         # Should return error or empty
     except IDAError:
         pass  # Expected for non-existent struct

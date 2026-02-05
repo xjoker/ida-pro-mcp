@@ -13,10 +13,9 @@ Features:
 import logging
 import sys
 import idaapi
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from . import ida_mcp
     from .ida_mcp.zeromcp.mcp import McpServer
 
 # Configure logging to stdout (IDA console)

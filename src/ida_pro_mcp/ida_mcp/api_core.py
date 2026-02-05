@@ -10,7 +10,7 @@ import ida_nalt
 
 from .rpc import tool
 from .sync import idasync
-from .cache import function_cache, string_cache
+from .cache import function_cache
 
 # Cached strings list: [(ea, text), ...]
 _strings_cache: list[tuple[int, str]] | None = None
