@@ -3,11 +3,14 @@
 Provides authentication middleware for MCP server with support for:
 - Bearer token authentication (Authorization: Bearer <key>)
 - X-API-Key header authentication
+- Environment variable expansion (${ENV_VAR} syntax)
 - Timing-attack resistant comparison
 """
 
 import hmac
 import logging
+import os
+import re
 from typing import Optional, Callable
 
 logger = logging.getLogger(__name__)
@@ -17,6 +20,33 @@ AUTH_EXEMPT_PATHS = frozenset({
     "/health",
     "/config.html",
 })
+
+# Pattern to match ${ENV_VAR} syntax
+_ENV_VAR_PATTERN = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
+
+
+def resolve_env_var(value: Optional[str]) -> Optional[str]:
+    """Resolve environment variable reference in ${VAR} format.
+
+    Args:
+        value: The value to resolve, may be a literal or ${ENV_VAR} reference
+
+    Returns:
+        The resolved value (from environment) or the original value if not a reference
+    """
+    if not value:
+        return value
+
+    match = _ENV_VAR_PATTERN.match(value.strip())
+    if match:
+        env_name = match.group(1)
+        env_value = os.environ.get(env_name)
+        if env_value:
+            return env_value
+        else:
+            logger.warning(f"Environment variable '{env_name}' not found, using literal value")
+            return None  # Env var not set, disable auth
+    return value
 
 
 def check_api_key(provided_key: Optional[str], expected_key: Optional[str]) -> bool:
@@ -100,23 +130,29 @@ class AuthMiddleware:
 
         Args:
             api_key: The expected API key (None = no authentication)
+                     Supports ${ENV_VAR} syntax to reference environment variables
             enabled: Whether authentication is enabled
         """
-        self._api_key = api_key
+        self._api_key_raw = api_key  # Store original value (may be ${ENV_VAR})
         self._enabled = enabled and api_key is not None
 
     @property
     def enabled(self) -> bool:
         return self._enabled
 
+    @property
+    def _api_key(self) -> Optional[str]:
+        """Get the resolved API key (expands ${ENV_VAR} references)."""
+        return resolve_env_var(self._api_key_raw)
+
     def update_key(self, api_key: Optional[str], enabled: bool = True) -> None:
         """Update the API key configuration.
 
         Args:
-            api_key: New API key
+            api_key: New API key (supports ${ENV_VAR} syntax)
             enabled: Whether to enable authentication
         """
-        self._api_key = api_key
+        self._api_key_raw = api_key
         self._enabled = enabled and api_key is not None
 
     def authenticate(self, path: str, headers: dict) -> bool:
@@ -160,6 +196,7 @@ __all__ = [
     "check_api_key",
     "extract_api_key_from_headers",
     "is_path_exempt",
+    "resolve_env_var",
     "AuthMiddleware",
     "create_auth_check",
     "AUTH_EXEMPT_PATHS",
