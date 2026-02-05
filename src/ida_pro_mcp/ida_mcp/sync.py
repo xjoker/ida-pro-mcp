@@ -107,11 +107,14 @@ def _sync_wrapper(ff):
             raise IDASyncError(error_str)
 
         call_stack.put((ff.__name__))
+        # Enable batch mode for all synchronized operations
+        old_batch = idc.batch(1)
         try:
             res_container.put(ff())
         except Exception as x:
             res_container.put(x)
         finally:
+            idc.batch(old_batch)
             call_stack.get()
 
     idaapi.execute_sync(runned, idaapi.MFF_WRITE)
@@ -132,20 +135,13 @@ def _normalize_timeout(value: object) -> float | None:
 
 
 def sync_wrapper(ff, timeout_override: float | None = None):
-    """Wrapper to enable batch mode during IDA synchronization."""
+    """Wrapper to enable timeout and cancellation during IDA synchronization.
+
+    Note: Batch mode is handled in _sync_wrapper to ensure it's always
+    applied consistently for all synchronized operations.
+    """
     # Capture cancel event from thread-local before execute_sync
     cancel_event = get_current_cancel_event()
-
-    def _run_with_batch(inner_ff):
-        def _wrapped():
-            old_batch = idc.batch(1)
-            try:
-                return inner_ff()
-            finally:
-                idc.batch(old_batch)
-
-        _wrapped.__name__ = inner_ff.__name__
-        return _wrapped
 
     timeout = timeout_override
     if timeout is None:
@@ -172,8 +168,8 @@ def sync_wrapper(ff, timeout_override: float | None = None):
                 sys.setprofile(old_profile)
 
         timed_ff.__name__ = ff.__name__
-        return _sync_wrapper(_run_with_batch(timed_ff))
-    return _sync_wrapper(_run_with_batch(ff))
+        return _sync_wrapper(timed_ff)
+    return _sync_wrapper(ff)
 
 
 def idasync(f):

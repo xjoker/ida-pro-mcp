@@ -22,6 +22,7 @@ from typing import (
 
 import ida_funcs
 import ida_hexrays
+import ida_idp
 import ida_kernwin
 import ida_nalt
 import ida_typeinf
@@ -1022,7 +1023,8 @@ def get_callees(addr: str) -> list[dict]:
         while current_ea < func_end:
             insn = idaapi.insn_t()
             idaapi.decode_insn(insn, current_ea)
-            if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+            # Use architecture-independent call instruction detection
+            if ida_idp.is_call_insn(insn):
                 target = idc.get_operand_value(current_ea, 0)
                 target_type = idc.get_operand_type(current_ea, 0)
                 if target_type in [idaapi.o_mem, idaapi.o_near, idaapi.o_far]:
@@ -1064,11 +1066,8 @@ def get_callers(addr: str, limit: int = 50) -> list[Function]:
                 continue
             insn = idaapi.insn_t()
             idaapi.decode_insn(insn, caller_addr)
-            if insn.itype not in [
-                idaapi.NN_call,
-                idaapi.NN_callfi,
-                idaapi.NN_callni,
-            ]:
+            # Use architecture-independent call instruction detection
+            if not ida_idp.is_call_insn(insn):
                 continue
             callers[func["addr"]] = func
 

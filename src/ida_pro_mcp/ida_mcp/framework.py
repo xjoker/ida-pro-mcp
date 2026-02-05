@@ -340,6 +340,7 @@ def get_functions_with_calls() -> list[str]:
     """
     import idaapi
     import idautils
+    import ida_idp
 
     result = []
     for func_ea in idautils.Functions():
@@ -352,7 +353,8 @@ def get_functions_with_calls() -> list[str]:
         for head in idautils.Heads(func.start_ea, func.end_ea):
             insn = idaapi.insn_t()
             if idaapi.decode_insn(insn, head) > 0:
-                if insn.itype in [idaapi.NN_call, idaapi.NN_callfi, idaapi.NN_callni]:
+                # Use architecture-independent call instruction detection
+                if ida_idp.is_call_insn(insn):
                     has_call = True
                     break
 
