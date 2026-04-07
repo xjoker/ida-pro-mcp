@@ -130,49 +130,151 @@ class ConnectionPool:
             self._created = 0
 
 
-_connection_pool: ConnectionPool | None = None
+# ============================================================================
+# Per-Instance Connection Pool Management
+# ============================================================================
+
+_instance_pools: dict[tuple[str, int], ConnectionPool] = {}
 _pool_lock = threading.Lock()
 
+# Session-to-instance routing: transport_session_id -> (host, port)
+_session_routes: dict[str, tuple[str, int]] = {}
+_routes_lock = threading.Lock()
 
-def _get_connection_pool() -> ConnectionPool:
-    """Get or create the global connection pool (thread-safe singleton)."""
-    global _connection_pool
-    if _connection_pool is None:
+
+def _get_pool_for(host: str, port: int) -> ConnectionPool:
+    """Get or create a connection pool for a specific IDA instance."""
+    key = (host, port)
+    if key not in _instance_pools:
         with _pool_lock:
-            if _connection_pool is None:
-                _connection_pool = ConnectionPool(IDA_HOST, IDA_PORT)
-    return _connection_pool
+            if key not in _instance_pools:
+                _instance_pools[key] = ConnectionPool(host, port)
+    return _instance_pools[key]
 
 
-def _reset_connection_pool():
-    """Reset the connection pool (called when IDA host/port changes)."""
-    global _connection_pool
+def _reset_all_pools():
+    """Close all connection pools."""
     with _pool_lock:
-        if _connection_pool is not None:
-            _connection_pool.close_all()
-            _connection_pool = None
+        for pool in _instance_pools.values():
+            pool.close_all()
+        _instance_pools.clear()
 
+
+def _probe_instance(host: str, port: int, timeout: float = 2.0) -> dict | None:
+    """Probe an IDA instance via health check. Returns metadata or None."""
+    try:
+        conn = http.client.HTTPConnection(host, port, timeout=timeout)
+        request_body = json.dumps({
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "probe", "version": "1.0"},
+            },
+            "id": 1,
+        }).encode("utf-8")
+        conn.request("POST", "/mcp", request_body, {"Content-Type": "application/json"})
+        response = conn.getresponse()
+        data = json.loads(response.read().decode())
+        conn.close()
+        if "result" in data:
+            return data["result"].get("serverInfo", {})
+        return {}
+    except Exception:
+        return None
+
+
+# ============================================================================
+# MCP Server & Local Tools
+# ============================================================================
 
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
 
-def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
-    """Dispatch JSON-RPC requests to the MCP server registry.
+@mcp.tool
+def list_instances(
+    host: str = "127.0.0.1",
+    port_range_start: int = 13337,
+    port_range_end: int = 13347,
+) -> dict:
+    """Discover running IDA Pro instances by scanning ports"""
+    instances = []
+    for port in range(port_range_start, port_range_end):
+        info = _probe_instance(host, port)
+        if info is not None:
+            instances.append({
+                "host": host,
+                "port": port,
+                "server_info": info,
+                "url": f"http://{host}:{port}/mcp",
+            })
+    return {
+        "instances": instances,
+        "count": len(instances),
+        "_ai_instruction": "Use select_instance(port=N) to route subsequent calls to a specific IDA instance.",
+    }
 
-    Uses connection pooling for improved performance.
+
+@mcp.tool
+def select_instance(
+    port: int,
+    host: str = "127.0.0.1",
+) -> dict:
+    """Route subsequent tool calls to a specific IDA instance"""
+    # Get current transport session ID
+    session_id = mcp.get_current_transport_session_id() or "default"
+
+    # Verify instance is alive
+    info = _probe_instance(host, port)
+    if info is None:
+        return {"error": f"No IDA instance at {host}:{port}", "selected": False}
+
+    with _routes_lock:
+        _session_routes[session_id] = (host, port)
+
+    return {
+        "host": host,
+        "port": port,
+        "session_id": session_id,
+        "server_info": info,
+        "selected": True,
+    }
+
+
+def _get_target_for_session() -> tuple[str, int]:
+    """Resolve the target IDA instance for the current transport session."""
+    session_id = mcp.get_current_transport_session_id()
+    if session_id:
+        with _routes_lock:
+            route = _session_routes.get(session_id)
+            if route:
+                return route
+    return (IDA_HOST, IDA_PORT)
+
+
+def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse | None:
+    """Dispatch JSON-RPC requests, routing to the selected IDA instance.
+
+    Local tools (list_instances, select_instance) are handled directly.
+    All other requests are proxied to the target IDA instance.
     """
     if not isinstance(request, dict):
         request_obj: JsonRpcRequest = json.loads(request)
     else:
         request_obj: JsonRpcRequest = request  # type: ignore
 
-    if request_obj["method"] == "initialize":
-        return dispatch_original(request)
-    elif request_obj["method"].startswith("notifications/"):
+    method = request_obj["method"]
+
+    # Handle locally: initialize, notifications, and local tools
+    if method == "initialize" or method.startswith("notifications/"):
         return dispatch_original(request)
 
-    pool = _get_connection_pool()
+    # Resolve target IDA instance for this session
+    target_host, target_port = _get_target_for_session()
+    pool = _get_pool_for(target_host, target_port)
+
     try:
         if isinstance(request, dict):
             request_bytes = json.dumps(request).encode("utf-8")
@@ -190,19 +292,20 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
             return json.loads(data)
     except Exception as e:
         full_info = traceback.format_exc()
-        id = request_obj.get("id")
-        if id is None:
-            return None  # Notification, no response needed
+        req_id = request_obj.get("id")
+        if req_id is None:
+            return None
 
         return JsonRpcResponse(
             {
                 "jsonrpc": "2.0",
                 "error": {
                     "code": -32000,
-                    "message": f"Failed to connect to IDA Pro! Did you run Edit -> Plugins -> MCP Server to start the server?\n{full_info}",
+                    "message": f"Failed to connect to IDA Pro at {target_host}:{target_port}! "
+                               f"Did you run Edit -> Plugins -> MCP Server?\n{full_info}",
                     "data": str(e),
                 },
-                "id": id,
+                "id": req_id,
             }
         )
 
@@ -256,8 +359,8 @@ def main():
     IDA_HOST = ida_rpc.hostname
     IDA_PORT = ida_rpc.port
 
-    # Reset connection pool if host/port changed
-    _reset_connection_pool()
+    # Reset connection pools if host/port changed
+    _reset_all_pools()
 
     if args.install and args.uninstall:
         print("Cannot install and uninstall at the same time")
