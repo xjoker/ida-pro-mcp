@@ -4,6 +4,9 @@ import time
 import uuid
 import json
 import gzip
+import zlib
+import select
+import socket
 import inspect
 import threading
 import traceback
@@ -162,18 +165,68 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             case _:
                 self.send_error(404, "Not Found")
 
-    def do_POST(self):
-        # Read request body
+    def _read_body(self) -> bytes | None:
+        """Read request body, handling Content-Length and chunked transfer encoding."""
+        transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
+        limit = self.mcp_server.post_body_limit
+
+        if "chunked" in transfer_encoding:
+            return self._read_chunked(limit)
+
         content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > limit:
+            self.send_error(413, f"Payload Too Large: exceeds {limit} bytes")
+            return None
+        return self.rfile.read(content_length) if content_length > 0 else b""
 
-        if content_length > self.mcp_server.post_body_limit:
-            self.send_error(
-                413,
-                f"Payload Too Large: exceeds {self.mcp_server.post_body_limit} bytes",
-            )
-            return
+    def _read_chunked(self, limit: int) -> bytes | None:
+        """Parse chunked transfer encoding (RFC 7230 §4.1)."""
+        parts: list[bytes] = []
+        total = 0
+        while True:
+            size_line = self.rfile.readline(64).strip()
+            if not size_line:
+                break
+            chunk_size = int(size_line.split(b";", 1)[0], 16)
+            if chunk_size == 0:
+                # Consume optional trailers + final CRLF
+                while True:
+                    trailer = self.rfile.readline(4096).strip()
+                    if not trailer:
+                        break
+                break
+            total += chunk_size
+            if total > limit:
+                self.send_error(413, f"Payload Too Large: exceeds {limit} bytes")
+                return None
+            parts.append(self.rfile.read(chunk_size))
+            self.rfile.readline()  # consume trailing CRLF
+        return b"".join(parts)
 
-        body = self.rfile.read(content_length) if content_length > 0 else b""
+    def _decompress_body(self, body: bytes) -> bytes:
+        """Decompress request body based on Content-Encoding header."""
+        encoding = self.headers.get("Content-Encoding", "").lower()
+        if not encoding:
+            return body
+        try:
+            if encoding in ("gzip", "x-gzip"):
+                return gzip.decompress(body)
+            if encoding == "deflate":
+                # Try raw deflate first, fall back to zlib-wrapped
+                try:
+                    return zlib.decompress(body, -zlib.MAX_WBITS)
+                except zlib.error:
+                    return zlib.decompress(body)
+        except (gzip.BadGzipFile, zlib.error, OSError):
+            pass
+        return body
+
+    def do_POST(self):
+        body = self._read_body()
+        if body is None:
+            return  # error already sent
+
+        body = self._decompress_body(body)
 
         match urlparse(self.path).path:
             case "/sse":
@@ -206,15 +259,31 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             # Send endpoint event with session ID for routing
             conn.send_event("endpoint", f"/sse?session={conn.session_id}")
 
-            # Keep connection alive with periodic pings
+            # Keep connection alive; detect client disconnect via select()
             last_ping = time.time()
+            sock = self.request  # underlying socket
             while conn.alive and self.mcp_server._running:
+                # Wait up to 30s for socket activity or timeout for ping
+                try:
+                    readable, _, _ = select.select([sock], [], [], 30)
+                except (OSError, ValueError):
+                    break  # socket closed
+
+                if readable:
+                    # Socket readable — check for client disconnect (EOF)
+                    try:
+                        data = sock.recv(1, socket.MSG_PEEK)
+                        if not data:
+                            break  # client sent FIN
+                    except (OSError, ConnectionError):
+                        break
+
+                # Send periodic ping
                 now = time.time()
-                if now - last_ping > 30:  # Ping every 30 seconds
+                if now - last_ping > 30:
                     if not conn.send_event("ping", {}):
                         break
                     last_ping = now
-                time.sleep(1)
 
         finally:
             conn.alive = False
@@ -231,6 +300,9 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
+
+        # Track transport session ID (SSE session)
+        setattr(self.mcp_server._transport_session_id, "data", f"sse:{session_id}")
 
         # Dispatch to MCP registry
         setattr(self.mcp_server._protocol_version, "data", "2024-11-05")
@@ -261,6 +333,10 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
+
+        # Track transport session ID for cross-instance routing
+        session_id = self.headers.get("Mcp-Session-Id", "http:anonymous")
+        setattr(self.mcp_server._transport_session_id, "data", session_id)
 
         # Check if client accepts gzip encoding
         accept_encoding = self.headers.get("Accept-Encoding", "")
@@ -324,6 +400,7 @@ class McpServer:
         self._sse_connections: dict[str, _McpSseConnection] = {}
         self._protocol_version = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
+        self._transport_session_id = threading.local()  # str per request
         self._extensions_registry = (
             extensions if extensions is not None else {}
         )  # group -> set of tool names
@@ -344,6 +421,10 @@ class McpServer:
         self.registry.methods["notifications/cancelled"] = (
             self._mcp_notifications_cancelled
         )
+
+    def get_current_transport_session_id(self) -> str | None:
+        """Return the transport session ID for the current request thread."""
+        return getattr(self._transport_session_id, "data", None)
 
     def tool(self, func: Callable) -> Callable:
         return self.tools.method(func)
@@ -378,6 +459,12 @@ class McpServer:
         self._http_server.allow_reuse_address = True
         if hasattr(self._http_server, "allow_reuse_port"):
             self._http_server.allow_reuse_port = True
+
+        # Windows: prevent port hijacking by other processes
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self._http_server.socket.setsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1
+            )
 
         # Set the MCPServer instance on the handler class
         setattr(self._http_server, "mcp_server", self)
@@ -442,6 +529,7 @@ class McpServer:
     def stdio(self, stdin: BinaryIO | None = None, stdout: BinaryIO | None = None):
         stdin = stdin or sys.stdin.buffer
         stdout = stdout or sys.stdout.buffer
+        setattr(self._transport_session_id, "data", "stdio:default")
         while True:
             try:
                 request = stdin.readline()

@@ -169,6 +169,11 @@ def ext(group: str):
     return decorator
 
 
+def get_current_transport_session_id() -> str | None:
+    """Return the transport session ID for the current request thread."""
+    return MCP_SERVER.get_current_transport_session_id()
+
+
 __all__ = [
     "McpRpcRegistry",
     "McpServer",
@@ -184,4 +189,5 @@ __all__ = [
     "get_cached_output",
     "set_download_base_url",
     "get_download_base_url",
+    "get_current_transport_session_id",
 ]
