@@ -233,6 +233,37 @@ class StackVarDelete(TypedDict):
     name: Annotated[str, "Variable name"]
 
 
+class XrefQuery(TypedDict, total=False):
+    """Cross-reference query"""
+
+    addr: Annotated[str, "Address to query xrefs for"]
+    direction: Annotated[str, "Direction: 'to', 'from', or 'both' (default: 'to')"]
+    type: Annotated[str, "Filter: 'any', 'code', or 'data' (default: 'any')"]
+    offset: Annotated[int, "Skip first N results (default: 0)"]
+    count: Annotated[int, "Max results (default: 200, max: 5000)"]
+
+
+class FuncProfileQuery(TypedDict, total=False):
+    """Function profile query"""
+
+    addr: Annotated[str, "Function address or name"]
+    include_lists: Annotated[bool, "Include caller/callee/string lists (default: false)"]
+
+
+class AnalyzeBatchQuery(TypedDict, total=False):
+    """Batch function analysis query"""
+
+    addr: Annotated[str, "Function address or name"]
+    include_decompile: Annotated[bool, "Include decompilation (default: true)"]
+    include_asm: Annotated[bool, "Include disassembly (default: false)"]
+    include_xrefs: Annotated[bool, "Include xrefs (default: true)"]
+    include_strings: Annotated[bool, "Include string refs (default: true)"]
+    include_constants: Annotated[bool, "Include constants (default: true)"]
+    include_callers: Annotated[bool, "Include callers (default: true)"]
+    include_callees: Annotated[bool, "Include callees (default: true)"]
+    max_decompile_lines: Annotated[int, "Max decompile lines (default: 200)"]
+
+
 # ============================================================================
 # TypedDict Definitions for Results
 # ============================================================================

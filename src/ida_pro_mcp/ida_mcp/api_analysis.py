@@ -20,6 +20,7 @@ from .cache import decompile_cache, xrefs_cache
 from .utils import (
     parse_address,
     normalize_list_input,
+    normalize_dict_list,
     get_function,
     get_prototype,
     get_stack_frame_variables_internal,
@@ -27,11 +28,16 @@ from .utils import (
     get_assembly_lines,
     get_all_xrefs,
     get_all_comments,
+    extract_function_strings,
+    extract_function_constants,
     Argument,
     DisassemblyFunction,
     Xref,
     BasicBlock,
     StructFieldQuery,
+    XrefQuery,
+    FuncProfileQuery,
+    AnalyzeBatchQuery,
 )
 
 # ============================================================================
@@ -1294,5 +1300,409 @@ def callgraph(
 
         except Exception as e:
             results.append({"root": root, "error": str(e), "nodes": [], "edges": []})
+
+    return results
+
+
+# ============================================================================
+# Advanced Query Tools
+# ============================================================================
+
+
+@tool
+@idasync
+@tool_timeout(120.0)
+def insn_query(
+    queries: Annotated[
+        list[dict] | dict | str,
+        "Instruction patterns to search: mnem, op0/op1/op2/op_any, func/segment/start/end scope",
+    ],
+) -> list[dict]:
+    """Search for instructions matching mnemonic/operand patterns within a scope"""
+    items = normalize_dict_list(queries)
+    results = []
+
+    for query in items:
+        mnem = query.get("mnem", "*").lower()
+        op_filters = {}
+        for key in ("op0", "op1", "op2"):
+            if key in query:
+                op_filters[int(key[-1])] = int(query[key])
+        op_any = query.get("op_any")
+        if op_any is not None:
+            op_any = int(op_any)
+
+        max_scan = min(int(query.get("max_scan_insns", 200000)), 2000000)
+        count = min(int(query.get("count", 500)), 5000)
+        allow_broad = bool(query.get("allow_broad", False))
+
+        # Determine scan range
+        scan_ranges: list[tuple[int, int]] = []
+        if "func" in query:
+            ea = parse_address(query["func"])
+            f = get_function(ea)
+            scan_ranges.append((f.start_ea, f.end_ea))
+        elif "segment" in query:
+            seg_name = query["segment"]
+            seg = idaapi.get_segm_by_name(seg_name)
+            if seg is None:
+                results.append({"query": query, "error": f"Segment '{seg_name}' not found", "matches": []})
+                continue
+            scan_ranges.append((seg.start_ea, seg.end_ea))
+        elif "start" in query and "end" in query:
+            scan_ranges.append((parse_address(query["start"]), parse_address(query["end"])))
+        elif allow_broad:
+            for seg_ea in idautils.Segments():
+                seg = idaapi.getseg(seg_ea)
+                if seg and seg.type == idaapi.SEG_CODE:
+                    scan_ranges.append((seg.start_ea, seg.end_ea))
+        else:
+            results.append({
+                "query": query,
+                "error": "No scope specified. Set func/segment/start+end, or allow_broad=true.",
+                "matches": [],
+            })
+            continue
+
+        matches = []
+        scanned = 0
+        truncated = False
+
+        for start_ea, end_ea in scan_ranges:
+            if truncated:
+                break
+            ea = start_ea
+            while ea < end_ea and ea != idaapi.BADADDR:
+                if scanned >= max_scan:
+                    truncated = True
+                    break
+                scanned += 1
+
+                insn = _decode_insn_at(ea)
+                if insn is None:
+                    ea = _next_head(ea, end_ea)
+                    if ea == idaapi.BADADDR:
+                        break
+                    continue
+
+                # Match mnemonic
+                if mnem != "*" and _insn_mnem(insn) != mnem:
+                    ea += insn.size
+                    continue
+
+                # Match specific operands
+                matched = True
+                for idx, expected in op_filters.items():
+                    val = _operand_value(insn, idx)
+                    if val is None or val != expected:
+                        matched = False
+                        break
+
+                # Match any operand
+                if matched and op_any is not None:
+                    any_match = False
+                    for i in range(8):
+                        if insn.ops[i].type == ida_ua.o_void:
+                            break
+                        val = _operand_value(insn, i)
+                        if val == op_any:
+                            any_match = True
+                            break
+                    if not any_match:
+                        matched = False
+
+                if matched:
+                    func = idaapi.get_func(ea)
+                    match_info = {
+                        "addr": hex(ea),
+                        "mnem": _insn_mnem(insn),
+                        "disasm": ida_lines.generate_disasm_line(ea, 0).strip() if ida_lines else "",
+                    }
+                    if func:
+                        match_info["func"] = hex(func.start_ea)
+                    matches.append(match_info)
+                    if len(matches) >= count:
+                        truncated = True
+                        break
+
+                ea += insn.size
+
+        results.append({
+            "query": query,
+            "matches": matches,
+            "count": len(matches),
+            "scanned": scanned,
+            "truncated": truncated,
+        })
+
+    return results
+
+
+@tool
+@idasync
+def xref_query(
+    queries: Annotated[
+        list[XrefQuery] | XrefQuery | str,
+        "Xref queries with direction/type filtering and pagination",
+    ],
+) -> list[dict]:
+    """Query cross-references with direction, type filtering, and pagination"""
+    items = normalize_dict_list(queries)
+    results = []
+
+    for query in items:
+        addr_str = query.get("addr", "")
+        direction = query.get("direction", "to")
+        xref_type = query.get("type", "any")
+        offset = int(query.get("offset", 0))
+        count = min(int(query.get("count", 200)), 5000)
+
+        try:
+            ea = parse_address(addr_str)
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e), "xrefs": []})
+            continue
+
+        xrefs = []
+        seen = set()
+
+        def collect_xrefs(iterator, from_or_to: str):
+            for xref in iterator:
+                if from_or_to == "to":
+                    key = (xref.frm, ea, xref.type)
+                    entry = {"from": hex(xref.frm), "to": hex(ea), "xref_type": ida_xref.get_xref_type_name(xref.type)}
+                else:
+                    key = (ea, xref.to, xref.type)
+                    entry = {"from": hex(ea), "to": hex(xref.to), "xref_type": ida_xref.get_xref_type_name(xref.type)}
+
+                is_code = xref.type in (ida_xref.fl_CF, ida_xref.fl_CN, ida_xref.fl_JF, ida_xref.fl_JN)
+                if xref_type == "code" and not is_code:
+                    continue
+                if xref_type == "data" and is_code:
+                    continue
+
+                if key not in seen:
+                    seen.add(key)
+                    func = idaapi.get_func(entry["from"] if from_or_to == "to" else entry["to"])
+                    if func:
+                        entry["func"] = hex(func.start_ea)
+                    xrefs.append(entry)
+
+        if direction in ("to", "both"):
+            collect_xrefs(idautils.XrefsTo(ea, 0), "to")
+        if direction in ("from", "both"):
+            collect_xrefs(idautils.XrefsFrom(ea, 0), "from")
+
+        total = len(xrefs)
+        paged = xrefs[offset : offset + count]
+        next_offset = offset + count if offset + count < total else None
+
+        results.append({
+            "addr": hex(ea),
+            "direction": direction,
+            "xrefs": paged,
+            "total": total,
+            "next_offset": next_offset,
+        })
+
+    return results
+
+
+@tool
+@idasync
+def func_profile(
+    queries: Annotated[
+        list[FuncProfileQuery] | FuncProfileQuery | str,
+        "Function addresses/names to profile",
+    ],
+) -> list[dict]:
+    """Get function metrics: size, complexity, call counts, string/constant counts"""
+    items = normalize_dict_list(queries)
+    results = []
+
+    for query in items:
+        addr_str = query.get("addr", "")
+        include_lists = bool(query.get("include_lists", False))
+
+        try:
+            ea = parse_address(addr_str)
+            f = get_function(ea)
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e)})
+            continue
+
+        # Basic metrics
+        insn_count = 0
+        block_starts = set()
+        edges = 0
+        for item_ea in idautils.FuncItems(f.start_ea):
+            insn_count += 1
+            insn = _decode_insn_at(item_ea)
+            if insn is None:
+                continue
+            refs = list(idautils.CodeRefsFrom(item_ea, 0))
+            if refs:
+                edges += len(refs)
+                for ref in refs:
+                    if f.start_ea <= ref < f.end_ea:
+                        block_starts.add(ref)
+
+        block_count = max(len(block_starts), 1)
+        complexity = edges - block_count + 2  # cyclomatic
+
+        callers = list(idautils.CodeRefsTo(f.start_ea, 0))
+        callees_set = set()
+        for item_ea in idautils.FuncItems(f.start_ea):
+            for ref in idautils.CodeRefsFrom(item_ea, 0):
+                callee_f = idaapi.get_func(ref)
+                if callee_f and callee_f.start_ea != f.start_ea:
+                    callees_set.add(callee_f.start_ea)
+
+        strings = extract_function_strings(f.start_ea)
+        constants = extract_function_constants(f.start_ea)
+
+        profile = {
+            "addr": hex(f.start_ea),
+            "name": idaapi.get_func_name(f.start_ea) or "",
+            "size": f.end_ea - f.start_ea,
+            "insn_count": insn_count,
+            "block_count": block_count,
+            "complexity": complexity,
+            "caller_count": len(callers),
+            "callee_count": len(callees_set),
+            "string_count": len(strings),
+            "constant_count": len(constants),
+        }
+
+        if include_lists:
+            profile["callers"] = [hex(c) for c in callers[:50]]
+            profile["callees"] = [hex(c) for c in sorted(callees_set)[:50]]
+            profile["strings"] = [s.get("value", "") for s in strings[:20]]
+            profile["constants"] = [c.get("value") for c in constants[:20]]
+
+        results.append(profile)
+
+    return results
+
+
+@tool
+@idasync
+@tool_timeout(120.0)
+def analyze_batch(
+    queries: Annotated[
+        list[AnalyzeBatchQuery] | AnalyzeBatchQuery | str,
+        "Functions to analyze with configurable output sections",
+    ],
+) -> list[dict]:
+    """Batch analyze multiple functions with configurable detail level"""
+    items = normalize_dict_list(queries)
+
+    # Size estimation guard (from jadx-ai-mcp pattern)
+    estimated_size = len(items) * 5000
+    if estimated_size > 50000:
+        return [{
+            "error": f"Batch too large ({len(items)} functions, ~{estimated_size // 1000}KB estimated). "
+                     "Reduce to ≤10 functions or use func_profile for metadata only.",
+            "_ai_instruction": "Split into smaller batches of ≤10 functions, or use func_profile for quick overview.",
+        }]
+
+    results = []
+    for query in items:
+        addr_str = query.get("addr", "")
+        try:
+            ea = parse_address(addr_str)
+            f = get_function(ea)
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e)})
+            continue
+
+        result: dict = {
+            "addr": hex(f.start_ea),
+            "name": idaapi.get_func_name(f.start_ea) or "",
+            "size": f.end_ea - f.start_ea,
+        }
+
+        # Prototype
+        try:
+            result["prototype"] = get_prototype(f.start_ea)
+        except Exception:
+            result["prototype"] = None
+
+        # Decompilation (default: on)
+        if query.get("include_decompile", True):
+            max_lines = int(query.get("max_decompile_lines", 200))
+            try:
+                code = decompile_function_safe(f.start_ea)
+                if code:
+                    lines = code.split("\n")
+                    if len(lines) > max_lines:
+                        result["decompile"] = "\n".join(lines[:max_lines])
+                        result["decompile_truncated"] = True
+                        result["decompile_total_lines"] = len(lines)
+                    else:
+                        result["decompile"] = code
+                else:
+                    result["decompile"] = None
+            except Exception as e:
+                result["decompile_error"] = str(e)
+
+        # Disassembly (default: off — expensive)
+        if query.get("include_asm", False):
+            try:
+                asm_lines = get_assembly_lines(f.start_ea, f.end_ea)
+                result["asm"] = asm_lines[:300]
+                if len(asm_lines) > 300:
+                    result["asm_truncated"] = True
+            except Exception:
+                pass
+
+        # Xrefs (default: on)
+        if query.get("include_xrefs", True):
+            try:
+                xref_data = get_all_xrefs(f.start_ea)
+                result["xrefs_to"] = xref_data.get("xrefs_to", [])[:50]
+                result["xrefs_from"] = xref_data.get("xrefs_from", [])[:50]
+            except Exception:
+                pass
+
+        # Strings (default: on)
+        if query.get("include_strings", True):
+            try:
+                strs = extract_function_strings(f.start_ea)
+                result["strings"] = [s.get("value", "") for s in strs[:20]]
+            except Exception:
+                pass
+
+        # Constants (default: on)
+        if query.get("include_constants", True):
+            try:
+                consts = extract_function_constants(f.start_ea)
+                # Filter boring constants
+                interesting = [c for c in consts if abs(c.get("value", 0)) > 1]
+                result["constants"] = [c.get("value") for c in interesting[:20]]
+            except Exception:
+                pass
+
+        # Callers/Callees (default: on)
+        if query.get("include_callers", True):
+            try:
+                callers = list(idautils.CodeRefsTo(f.start_ea, 0))
+                result["callers"] = [hex(c) for c in callers[:30]]
+            except Exception:
+                pass
+
+        if query.get("include_callees", True):
+            try:
+                callees_set = set()
+                for item_ea in idautils.FuncItems(f.start_ea):
+                    for ref in idautils.CodeRefsFrom(item_ea, 0):
+                        callee_f = idaapi.get_func(ref)
+                        if callee_f and callee_f.start_ea != f.start_ea:
+                            callees_set.add(callee_f.start_ea)
+                result["callees"] = [hex(c) for c in sorted(callees_set)[:30]]
+            except Exception:
+                pass
+
+        results.append(result)
 
     return results
