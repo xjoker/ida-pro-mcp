@@ -22,6 +22,7 @@ from .utils import (
     normalize_list_input,
     normalize_dict_list,
     get_function,
+    require_func_t,
     get_prototype,
     get_stack_frame_variables_internal,
     decompile_function_safe,
@@ -1334,7 +1335,7 @@ def insn_query(
         scan_ranges: list[tuple[int, int]] = []
         if "func" in query:
             ea = parse_address(query["func"])
-            f = get_function(ea)
+            f = require_func_t(ea)
             scan_ranges.append((f.start_ea, f.end_ea))
         elif "segment" in query:
             seg_name = query["segment"]
@@ -1477,7 +1478,9 @@ def xref_query(
 
                 if key not in seen:
                     seen.add(key)
-                    func = idaapi.get_func(entry["from"] if from_or_to == "to" else entry["to"])
+                    # Use integer addresses (not hex strings) for IDA API calls
+                    func_ea = xref.frm if from_or_to == "to" else xref.to
+                    func = idaapi.get_func(func_ea)
                     if func:
                         entry["func"] = hex(func.start_ea)
                     xrefs.append(entry)
@@ -1520,28 +1523,22 @@ def func_profile(
 
         try:
             ea = parse_address(addr_str)
-            f = get_function(ea)
+            f = require_func_t(ea)
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
             continue
 
         # Basic metrics
-        insn_count = 0
-        block_starts = set()
-        edges = 0
-        for item_ea in idautils.FuncItems(f.start_ea):
-            insn_count += 1
-            insn = _decode_insn_at(item_ea)
-            if insn is None:
-                continue
-            refs = list(idautils.CodeRefsFrom(item_ea, 0))
-            if refs:
-                edges += len(refs)
-                for ref in refs:
-                    if f.start_ea <= ref < f.end_ea:
-                        block_starts.add(ref)
+        insn_count = sum(1 for _ in idautils.FuncItems(f.start_ea))
 
-        block_count = max(len(block_starts), 1)
+        # Use FlowChart for accurate CFG (excludes call edges)
+        flowchart = idaapi.FlowChart(f)
+        block_count = 0
+        edges = 0
+        for block in flowchart:
+            block_count += 1
+            edges += sum(1 for _ in block.succs())
+        block_count = max(block_count, 1)
         complexity = edges - block_count + 2  # cyclomatic
 
         callers = list(idautils.CodeRefsTo(f.start_ea, 0))
@@ -1605,7 +1602,7 @@ def analyze_batch(
         addr_str = query.get("addr", "")
         try:
             ea = parse_address(addr_str)
-            f = get_function(ea)
+            f = require_func_t(ea)
         except Exception as e:
             results.append({"addr": addr_str, "error": str(e)})
             continue
@@ -1618,7 +1615,7 @@ def analyze_batch(
 
         # Prototype
         try:
-            result["prototype"] = get_prototype(f.start_ea)
+            result["prototype"] = get_prototype(f)
         except Exception:
             result["prototype"] = None
 

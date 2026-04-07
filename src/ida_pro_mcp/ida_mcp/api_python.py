@@ -28,9 +28,9 @@ from .utils import parse_address, get_function
 # ============================================================================
 
 
+@unsafe
 @tool
 @idasync
-@unsafe
 def py_eval(
     code: Annotated[str, "Python code"],
 ) -> dict:
@@ -179,9 +179,9 @@ def py_eval(
         sys.stderr = old_stderr
 
 
+@unsafe
 @tool
 @idasync
-@unsafe
 def py_exec_file(
     path: Annotated[str, "Absolute path to Python script file"],
 ) -> dict:

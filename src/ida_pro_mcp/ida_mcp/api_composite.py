@@ -14,7 +14,7 @@ from .sync import idasync, tool_timeout
 from .utils import (
     parse_address,
     normalize_list_input,
-    get_function,
+    require_func_t,
     get_prototype,
     decompile_function_safe,
     get_assembly_lines,
@@ -44,7 +44,7 @@ def analyze_function(
 ) -> dict:
     """Comprehensive single-function analysis: decompile + asm + xrefs + strings + constants + callers + callees + CFG"""
     ea = parse_address(addr)
-    f = get_function(ea)
+    f = require_func_t(ea)
     start = f.start_ea
 
     result: dict = {
@@ -55,7 +55,7 @@ def analyze_function(
 
     # Prototype
     try:
-        result["prototype"] = get_prototype(start)
+        result["prototype"] = get_prototype(f)
     except Exception:
         result["prototype"] = None
 
@@ -145,17 +145,14 @@ def analyze_function(
     except Exception:
         pass
 
-    # Basic block summary (count + edges for complexity)
+    # Basic block summary using FlowChart (accurate CFG, excludes call edges)
     try:
+        flowchart = idaapi.FlowChart(f)
         blocks = 0
         edges = 0
-        for item_ea in idautils.FuncItems(start):
-            refs = list(idautils.CodeRefsFrom(item_ea, 0))
-            if refs:
-                edges += len(refs)
-                for ref in refs:
-                    if start <= ref < f.end_ea:
-                        blocks += 1
+        for block in flowchart:
+            blocks += 1
+            edges += sum(1 for _ in block.succs())
         blocks = max(blocks, 1)
         result["cfg_summary"] = {
             "blocks": blocks,
@@ -205,7 +202,7 @@ def analyze_component(
     for root in roots:
         try:
             ea = parse_address(root)
-            f = get_function(ea)
+            f = require_func_t(ea)
             ea_set.add(f.start_ea)
             queue.append((f.start_ea, 0))
         except Exception:
@@ -217,7 +214,7 @@ def analyze_component(
         if depth >= max_depth:
             continue
         try:
-            f = get_function(current_ea)
+            f = require_func_t(current_ea)
             for item_ea in idautils.FuncItems(f.start_ea):
                 for ref in idautils.CodeRefsFrom(item_ea, 0):
                     callee_f = idaapi.get_func(ref)
@@ -236,14 +233,14 @@ def analyze_component(
     internal_edges = []
     for ea in sorted(ea_set):
         try:
-            f = get_function(ea)
+            f = require_func_t(ea)
             summary = {
                 "addr": hex(ea),
                 "name": idaapi.get_func_name(ea) or "",
                 "size": f.end_ea - ea,
             }
             try:
-                summary["prototype"] = get_prototype(ea)
+                summary["prototype"] = get_prototype(f)
             except Exception:
                 pass
 

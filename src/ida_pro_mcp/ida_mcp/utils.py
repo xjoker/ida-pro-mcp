@@ -511,6 +511,12 @@ def normalize_dict_list(
             if isinstance(parsed, dict):
                 return [parsed]
             elif isinstance(parsed, list):
+                # Apply string_parser to string elements in JSON-parsed lists
+                if string_parser and any(isinstance(item, str) for item in parsed):
+                    return [
+                        string_parser(item) if isinstance(item, str) else item
+                        for item in parsed
+                    ]
                 return parsed
         except (json.JSONDecodeError, ValueError):
             pass
@@ -563,6 +569,18 @@ def get_function(addr, *, raise_error=True):
         name = ida_funcs.get_func_name(fn.start_ea)
 
     return Function(addr=hex(addr), name=name, size=hex(fn.end_ea - fn.start_ea))
+
+
+def require_func_t(addr: int) -> "idaapi.func_t":
+    """Return raw func_t object for internal use (not for MCP serialization).
+
+    Unlike get_function() which returns a TypedDict, this returns the actual
+    IDA func_t with .start_ea / .end_ea attributes for SDK operations.
+    """
+    fn = idaapi.get_func(addr)
+    if fn is None:
+        raise IDAError(f"No function found at address {hex(addr)}")
+    return fn
 
 
 def get_prototype(fn: ida_funcs.func_t) -> Optional[str]:

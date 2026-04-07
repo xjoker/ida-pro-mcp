@@ -393,6 +393,11 @@ def main():
     signal.signal(signal.SIGINT, cleanup_and_exit)
     signal.signal(signal.SIGTERM, cleanup_and_exit)
 
+    # Enable unsafe tools if requested
+    if args.unsafe:
+        MCP_SERVER.set_unsafe_enabled(True)
+        logger.warning("Unsafe tools enabled — debugger and code execution tools are accessible")
+
     # Install context activation hooks for isolated sessions
     _install_context_hooks(session_manager)
 

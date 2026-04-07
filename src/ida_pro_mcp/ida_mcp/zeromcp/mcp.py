@@ -384,6 +384,7 @@ class McpServer:
         version="1.0.0",
         *,
         extensions: dict[str, set[str]] | None = None,
+        unsafe_registry: set[str] | None = None,
     ):
         self.name = name
         self.version = version
@@ -394,6 +395,8 @@ class McpServer:
         self.tools = McpRpcRegistry()
         self.resources = McpRpcRegistry()
         self.prompts = McpRpcRegistry()
+        self._unsafe_registry: set[str] = unsafe_registry if unsafe_registry is not None else set()
+        self._unsafe_enabled: bool = False
 
         self._http_server: HTTPServer | None = None
         self._server_thread: threading.Thread | None = None
@@ -426,6 +429,10 @@ class McpServer:
     def get_current_transport_session_id(self) -> str | None:
         """Return the transport session ID for the current request thread."""
         return getattr(self._transport_session_id, "data", None)
+
+    def set_unsafe_enabled(self, enabled: bool) -> None:
+        """Enable or disable unsafe tool access at runtime."""
+        self._unsafe_enabled = enabled
 
     def tool(self, func: Callable) -> Callable:
         return self.tools.method(func)
@@ -590,6 +597,9 @@ class McpServer:
             tool_group = self._get_tool_extension(func_name)
             if tool_group and tool_group not in enabled:
                 continue  # Skip tools from disabled extension groups
+            # Hide unsafe tools unless --unsafe is enabled
+            if func_name in self._unsafe_registry and not self._unsafe_enabled:
+                continue
             tools.append(self._generate_tool_schema(func_name, func))
         return {"tools": tools}
 
@@ -604,6 +614,18 @@ class McpServer:
         self, name: str, arguments: dict | None = None, _meta: dict | None = None
     ) -> dict:
         """MCP tools/call method"""
+        # Block unsafe tool calls unless --unsafe is enabled
+        if name in self._unsafe_registry and not self._unsafe_enabled:
+            return {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Tool '{name}' is unsafe and requires --unsafe flag to be enabled.",
+                    }
+                ],
+                "isError": True,
+            }
+
         # Check if tool requires an extension that isn't enabled
         enabled = getattr(self._enabled_extensions, "data", set())
         tool_group = self._get_tool_extension(name)

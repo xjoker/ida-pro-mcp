@@ -390,6 +390,9 @@ def main():
     parser.add_argument(
         "--config", action="store_true", help="Generate MCP config JSON"
     )
+    parser.add_argument(
+        "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
+    )
     args = parser.parse_args()
 
     # Parse IDA RPC server argument
@@ -423,6 +426,10 @@ def main():
     if args.config:
         print_mcp_config(IDA_HOST, IDA_PORT)
         return
+
+    # Enable unsafe tools if requested
+    if args.unsafe:
+        mcp.set_unsafe_enabled(True)
 
     try:
         if args.transport == "stdio":

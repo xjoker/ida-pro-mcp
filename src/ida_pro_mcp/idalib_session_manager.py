@@ -275,10 +275,7 @@ class IDASessionManager:
                 needs_switch = True
 
         if needs_switch and bound_id:
-            try:
-                self.switch_session(bound_id)
-            except Exception as e:
-                logger.warning(f"Failed to switch context for transport {transport_id}: {e}")
+            self.switch_session(bound_id)  # Let exception propagate — caller must not run on wrong IDB
 
         return self._current_session_id
 

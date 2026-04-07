@@ -6,7 +6,7 @@ from .zeromcp import McpRpcRegistry, McpServer, McpToolError, McpHttpRequestHand
 
 MCP_UNSAFE: set[str] = set()
 MCP_EXTENSIONS: dict[str, set[str]] = {}  # group -> set of function names
-MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS)
+MCP_SERVER = McpServer("ida-pro-mcp", extensions=MCP_EXTENSIONS, unsafe_registry=MCP_UNSAFE)
 
 # ============================================================================
 # Output Size Limiting

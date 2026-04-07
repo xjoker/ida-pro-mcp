@@ -546,9 +546,9 @@ def define_code(
     return results
 
 
+@unsafe
 @tool
 @idasync
-@unsafe
 def undefine(
     items: Annotated[
         list[dict] | dict | str,
