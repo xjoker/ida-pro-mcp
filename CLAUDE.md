@@ -56,16 +56,18 @@ git log --first-parent --no-merges 1.2.0..main "--pretty=- %s"
 
 ### Plugin Architecture (ida_mcp/)
 
-**Modular API**: 9 specialized modules
+**Modular API**: 11 specialized modules
 - `api_core.py`: IDB metadata, function/string/import listing
-- `api_analysis.py`: Decompilation, disassembly, xrefs, paths, patterns
+- `api_analysis.py`: Decompilation, disassembly, xrefs, paths, patterns, insn_query, xref_query, func_profile, analyze_batch
+- `api_composite.py`: Composite analysis (analyze_function, analyze_component)
+- `api_survey.py`: Binary triage (survey_binary)
 - `api_memory.py`: Read bytes/integers/strings, patch operations
-- `api_types.py`: Structures, type inference, type application
-- `api_modify.py`: Comments, assembly patching, renaming
+- `api_types.py`: Structures, type inference, type application, enum_upsert, type_query, type_inspect
+- `api_modify.py`: Comments, assembly patching, renaming, define_func, define_code, undefine
 - `api_stack.py`: Stack frame operations
 - `api_debug.py`: Debugger control (unsafe, requires `--unsafe` flag)
-- `api_python.py`: Python code execution in IDA context
-- `api_resources.py`: MCP resources (24 URI patterns for RESTful access via `ida://` URIs)
+- `api_python.py`: Python code execution in IDA context (py_eval, py_exec_file)
+- `api_resources.py`: MCP resources (11 URI patterns for RESTful access via `ida://` URIs)
 
 **Infrastructure**:
 - `rpc.py`: JSON-RPC registry + type checking (`@tool`, `@resource`, `@unsafe` decorators)
@@ -232,8 +234,10 @@ Server auto-negotiates based on client request.
 
 ```
 src/ida_pro_mcp/
-├── server.py              # MCP server + AST parser + installer
-├── idalib_server.py       # Headless idalib support
+├── server.py              # MCP server proxy + multi-instance routing
+├── installer.py           # MCP client & IDA plugin installation
+├── idalib_server.py       # Headless idalib support + isolated contexts
+├── idalib_session_manager.py # Multi-binary session management
 ├── ida_mcp.py             # IDA plugin loader
 └── ida_mcp/
     ├── __init__.py        # Package exports
@@ -243,7 +247,7 @@ src/ida_pro_mcp/
     ├── zeromcp/           # Vendored MCP server implementation
     │   ├── mcp.py         # HTTP/SSE server
     │   └── jsonrpc.py     # JSON-RPC protocol
-    └── api_*.py           # Modular API implementations
+    └── api_*.py           # 11 modular API implementations
 ```
 
 ## Installation Mechanics
