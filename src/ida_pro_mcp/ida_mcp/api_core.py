@@ -95,7 +95,7 @@ def lookup_funcs(
             all_funcs.append(get_function(addr))
             if len(all_funcs) >= 1000:
                 break
-        return [{"query": "*", "fn": fn, "error": None} for fn in all_funcs]
+        return [{"query": "*", "fn": fn, } for fn in all_funcs]
 
     results = []
     for query in queries:
@@ -117,7 +117,7 @@ def lookup_funcs(
             if ea != idaapi.BADADDR:
                 func = get_function(ea, raise_error=False)
                 if func:
-                    result = {"query": query, "fn": func, "error": None}
+                    result = {"query": query, "fn": func, }
                 else:
                     result = {"query": query, "fn": None, "error": "Not a function"}
             else:
@@ -194,7 +194,6 @@ def int_convert(
                     ascii=ascii_str,
                     binary=bin(value),
                 ),
-                "error": None,
             }
         )
 

@@ -715,12 +715,17 @@ def paginate(data: list[T], offset: int, count: int) -> Page[T]:
     if count == 0:
         count = len(data)
     next_offset = offset + count
-    if next_offset >= len(data):
+    truncated = next_offset < len(data)
+    if not truncated:
         next_offset = None
-    return {
+    result: Page[T] = {
         "data": data[offset : offset + count],
         "next_offset": next_offset,
     }
+    if truncated:
+        result["truncated"] = True
+        result["total"] = len(data)
+    return result
 
 
 def lazy_paginate(

@@ -572,7 +572,7 @@ def enum_upsert(
                 tif.create_enum(ed)
                 tif.set_named_type(til, enum_name, ida_typeinf.NTF_TYPE)
 
-            results.append({"name": enum_name, "members": member_results, "error": None})
+            results.append({"name": enum_name, "members": member_results, })
 
         except Exception as e:
             results.append({"name": enum_name, "error": str(e)})

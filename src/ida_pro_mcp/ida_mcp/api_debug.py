@@ -564,7 +564,6 @@ def dbg_read(regions: list[MemoryRead] | MemoryRead) -> list[dict]:
                         "addr": region["addr"],
                         "size": len(data),
                         "data": data.hex(),
-                        "error": None,
                     }
                 )
             else:

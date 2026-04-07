@@ -112,7 +112,7 @@ def get_int(
 
             value = int.from_bytes(data, byte_order, signed=signed)
             results.append(
-                {"addr": addr, "ty": normalized, "value": value, "error": None}
+                {"addr": addr, "ty": normalized, "value": value, }
             )
         except Exception as e:
             results.append({"addr": addr, "ty": ty, "value": None, "error": str(e)})
@@ -215,7 +215,7 @@ def get_global_value(
                 continue
 
             value = get_global_variable_value_internal(ea)
-            results.append({"query": query, "value": value, "error": None})
+            results.append({"query": query, "value": value, })
         except Exception as e:
             results.append({"query": query, "value": None, "error": str(e)})
 
@@ -243,7 +243,7 @@ def patch(patches: list[MemoryPatch] | MemoryPatch) -> list[dict]:
 
             ida_bytes.patch_bytes(ea, data)
             results.append(
-                {"addr": patch["addr"], "size": len(data), "ok": True, "error": None}
+                {"addr": patch["addr"], "size": len(data), "ok": True, }
             )
 
         except Exception as e:
@@ -287,7 +287,6 @@ def put_int(
                     "ty": normalized,
                     "value": str(value_text),
                     "ok": True,
-                    "error": None,
                 }
             )
         except Exception as e:

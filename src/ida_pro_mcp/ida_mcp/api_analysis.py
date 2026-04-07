@@ -693,7 +693,6 @@ def basic_blocks(
                     "cursor": (
                         {"next": offset + max_blocks} if more else {"done": True}
                     ),
-                    "error": None,
                 }
             )
         except Exception as e:
@@ -790,7 +789,6 @@ def find(
                     "matches": matches,
                     "count": len(matches),
                     "cursor": {"next": offset + limit} if more else {"done": True},
-                    "error": None,
                 }
             )
 
@@ -867,7 +865,6 @@ def find(
                     "matches": matches,
                     "count": len(matches),
                     "cursor": {"next": offset + limit} if more else {"done": True},
-                    "error": None,
                 }
             )
 
@@ -891,8 +888,7 @@ def find(
                         "cursor": (
                             {"next": offset + limit} if more else {"done": True}
                         ),
-                        "error": None,
-                    }
+                        }
                 )
             except Exception as e:
                 results.append(
@@ -925,8 +921,7 @@ def find(
                         "cursor": (
                             {"next": offset + limit} if more else {"done": True}
                         ),
-                        "error": None,
-                    }
+                        }
                 )
             except Exception as e:
                 results.append(
@@ -1294,7 +1289,6 @@ def callgraph(
                     "max_edges": max_edges,
                     "max_edges_per_func": max_edges_per_func,
                     "per_func_capped": per_func_capped,
-                    "error": None,
                 }
             )
 
