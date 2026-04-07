@@ -198,6 +198,7 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
             total += chunk_size
             if total > limit:
                 self.send_error(413, f"Payload Too Large: exceeds {limit} bytes")
+                self.close_connection = True  # prevent protocol state corruption
                 return None
             parts.append(self.rfile.read(chunk_size))
             self.rfile.readline()  # consume trailing CRLF

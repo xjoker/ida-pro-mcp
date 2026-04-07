@@ -285,12 +285,21 @@ def idalib_current() -> dict:
 logger = logging.getLogger(__name__)
 
 
+_context_hooks_installed = False
+
+
 def _install_context_hooks(session_manager):
     """Install hooks on tools/call and resources/read for per-session context activation.
 
     Before dispatching any tool call or resource read, the hook checks the current
     transport session ID and activates the bound IDA session if needed.
+    Idempotent: safe to call multiple times.
     """
+    global _context_hooks_installed
+    if _context_hooks_installed:
+        logger.debug("Context hooks already installed, skipping")
+        return
+
     # Hook tools/call
     original_tools_call = MCP_SERVER.registry.methods.get("tools/call")
     if original_tools_call:
@@ -309,6 +318,7 @@ def _install_context_hooks(session_manager):
             return original_resources_read(uri, _meta)
         MCP_SERVER.registry.methods["resources/read"] = resources_read_with_context
 
+    _context_hooks_installed = True
     logger.info("Installed isolated context hooks for tools/call and resources/read")
 
 

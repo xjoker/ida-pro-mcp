@@ -596,7 +596,7 @@ def type_query(
     """Search the local type library by name pattern and kind"""
     from .utils import normalize_dict_list, pattern_filter
 
-    items = normalize_dict_list(queries)
+    items = normalize_dict_list(queries, string_parser=lambda s: {"pattern": s})
     results = []
 
     til = ida_typeinf.get_idati()
@@ -640,7 +640,7 @@ def type_query(
 
         # Pattern filter
         if pattern != "*":
-            matching = pattern_filter(matching, "name", pattern)
+            matching = pattern_filter(matching, pattern, "name")
 
         total = len(matching)
         paged = matching[offset : offset + count]

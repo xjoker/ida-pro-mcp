@@ -1313,7 +1313,7 @@ def insn_query(
     ],
 ) -> list[dict]:
     """Search for instructions matching mnemonic/operand patterns within a scope"""
-    items = normalize_dict_list(queries)
+    items = normalize_dict_list(queries, string_parser=lambda s: {"mnem": s})
     results = []
 
     for query in items:
@@ -1441,7 +1441,7 @@ def xref_query(
     ],
 ) -> list[dict]:
     """Query cross-references with direction, type filtering, and pagination"""
-    items = normalize_dict_list(queries)
+    items = normalize_dict_list(queries, string_parser=lambda s: {"addr": s})
     results = []
 
     for query in items:
@@ -1511,7 +1511,7 @@ def func_profile(
     ],
 ) -> list[dict]:
     """Get function metrics: size, complexity, call counts, string/constant counts"""
-    items = normalize_dict_list(queries)
+    items = normalize_dict_list(queries, string_parser=lambda s: {"addr": s})
     results = []
 
     for query in items:
@@ -1571,7 +1571,7 @@ def func_profile(
         if include_lists:
             profile["callers"] = [hex(c) for c in callers[:50]]
             profile["callees"] = [hex(c) for c in sorted(callees_set)[:50]]
-            profile["strings"] = [s.get("value", "") for s in strings[:20]]
+            profile["strings"] = [s.get("string", "") for s in strings[:20]]
             profile["constants"] = [c.get("value") for c in constants[:20]]
 
         results.append(profile)
@@ -1589,7 +1589,7 @@ def analyze_batch(
     ],
 ) -> list[dict]:
     """Batch analyze multiple functions with configurable detail level"""
-    items = normalize_dict_list(queries)
+    items = normalize_dict_list(queries, string_parser=lambda s: {"addr": s})
 
     # Size estimation guard (from jadx-ai-mcp pattern)
     estimated_size = len(items) * 5000
@@ -1643,10 +1643,13 @@ def analyze_batch(
         # Disassembly (default: off — expensive)
         if query.get("include_asm", False):
             try:
-                asm_lines = get_assembly_lines(f.start_ea, f.end_ea)
-                result["asm"] = asm_lines[:300]
-                if len(asm_lines) > 300:
+                asm_lines = get_assembly_lines(f.start_ea)
+                lines = asm_lines.split("\n")
+                if len(lines) > 300:
+                    result["asm"] = "\n".join(lines[:300])
                     result["asm_truncated"] = True
+                else:
+                    result["asm"] = asm_lines
             except Exception:
                 pass
 
@@ -1654,8 +1657,8 @@ def analyze_batch(
         if query.get("include_xrefs", True):
             try:
                 xref_data = get_all_xrefs(f.start_ea)
-                result["xrefs_to"] = xref_data.get("xrefs_to", [])[:50]
-                result["xrefs_from"] = xref_data.get("xrefs_from", [])[:50]
+                result["xrefs_to"] = xref_data.get("to", [])[:50]
+                result["xrefs_from"] = xref_data.get("from", [])[:50]
             except Exception:
                 pass
 
@@ -1663,7 +1666,7 @@ def analyze_batch(
         if query.get("include_strings", True):
             try:
                 strs = extract_function_strings(f.start_ea)
-                result["strings"] = [s.get("value", "") for s in strs[:20]]
+                result["strings"] = [s.get("string", "") for s in strs[:20]]
             except Exception:
                 pass
 

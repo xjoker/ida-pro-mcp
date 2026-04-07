@@ -479,7 +479,7 @@ def define_func(
     ],
 ) -> list[dict]:
     """Create function boundaries at addresses"""
-    items = normalize_dict_list(items)
+    items = normalize_dict_list(items, string_parser=lambda s: {"addr": s})
     results = []
 
     for item in items:
@@ -556,7 +556,7 @@ def undefine(
     ],
 ) -> list[dict]:
     """Revert addresses to raw undefined bytes (destructive)"""
-    items = normalize_dict_list(items)
+    items = normalize_dict_list(items, string_parser=lambda s: {"addr": s})
     results = []
 
     for item in items:

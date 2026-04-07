@@ -78,18 +78,21 @@ def analyze_function(
     # Assembly (optional, off by default)
     if include_asm:
         try:
-            asm_lines = get_assembly_lines(start, f.end_ea)
-            result["asm"] = asm_lines[:300]
-            if len(asm_lines) > 300:
+            asm_lines = get_assembly_lines(start)
+            lines = asm_lines.split("\n")
+            if len(lines) > 300:
+                result["asm"] = "\n".join(lines[:300])
                 result["asm_truncated"] = True
+            else:
+                result["asm"] = asm_lines
         except Exception:
             pass
 
     # Xrefs
     try:
         xref_data = get_all_xrefs(start)
-        result["xrefs_to"] = xref_data.get("xrefs_to", [])[:50]
-        result["xrefs_from"] = xref_data.get("xrefs_from", [])[:50]
+        result["xrefs_to"] = xref_data.get("to", [])[:50]
+        result["xrefs_from"] = xref_data.get("from", [])[:50]
     except Exception:
         pass
 
@@ -99,7 +102,7 @@ def analyze_function(
         seen = set()
         unique = []
         for s in strs:
-            v = s.get("value", "")
+            v = s.get("string", "")
             if v and v not in seen:
                 seen.add(v)
                 unique.append(v)
@@ -247,7 +250,7 @@ def analyze_component(
             # Compact strings (top 5 values)
             try:
                 strs = extract_function_strings(ea)
-                summary["strings"] = list({s.get("value", "") for s in strs})[:5]
+                summary["strings"] = list({s.get("string", "") for s in strs})[:5]
             except Exception:
                 pass
 

@@ -77,7 +77,7 @@ def survey_binary(
                 "end": hex(seg.end_ea),
                 "size": seg.end_ea - seg.start_ea,
                 "type": "CODE" if seg.type == idaapi.SEG_CODE else "DATA" if seg.type == idaapi.SEG_DATA else "BSS" if seg.type == idaapi.SEG_BSS else str(seg.type),
-                "perm": f"{'R' if seg.perm & idaapi.SFL_READ else '-'}{'W' if seg.perm & idaapi.SFL_WRITE else '-'}{'X' if seg.perm & idaapi.SFL_EXEC else '-'}",
+                "perm": f"{'R' if seg.perm & idaapi.SEGPERM_READ else '-'}{'W' if seg.perm & idaapi.SEGPERM_WRITE else '-'}{'X' if seg.perm & idaapi.SEGPERM_EXEC else '-'}",
             })
     result["segments"] = segments
 

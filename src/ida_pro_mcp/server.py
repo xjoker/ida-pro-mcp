@@ -138,6 +138,8 @@ _instance_pools: dict[tuple[str, int], ConnectionPool] = {}
 _pool_lock = threading.Lock()
 
 # Session-to-instance routing: transport_session_id -> (host, port)
+# Bounded to prevent memory leaks from SSE reconnections
+_MAX_SESSION_ROUTES = 1000
 _session_routes: dict[str, tuple[str, int]] = {}
 _routes_lock = threading.Lock()
 
@@ -189,6 +191,9 @@ def _probe_instance(host: str, port: int, timeout: float = 2.0) -> dict | None:
 # MCP Server & Local Tools
 # ============================================================================
 
+# Local tool names — handled directly, not proxied to IDA
+_LOCAL_TOOLS: set[str] = set()
+
 mcp = McpServer("ida-pro-mcp")
 dispatch_original = mcp.registry.dispatch
 
@@ -232,6 +237,10 @@ def select_instance(
         return {"error": f"No IDA instance at {host}:{port}", "selected": False}
 
     with _routes_lock:
+        # Evict oldest entries if over limit
+        if len(_session_routes) >= _MAX_SESSION_ROUTES:
+            oldest = next(iter(_session_routes))
+            del _session_routes[oldest]
         _session_routes[session_id] = (host, port)
 
     return {
@@ -241,6 +250,9 @@ def select_instance(
         "server_info": info,
         "selected": True,
     }
+
+
+_LOCAL_TOOLS.update({"list_instances", "select_instance"})
 
 
 def _get_target_for_session() -> tuple[str, int]:
@@ -267,9 +279,37 @@ def dispatch_proxy(request: dict | str | bytes | bytearray) -> JsonRpcResponse |
 
     method = request_obj["method"]
 
-    # Handle locally: initialize, notifications, and local tools
+    # Handle locally: initialize, notifications
     if method == "initialize" or method.startswith("notifications/"):
         return dispatch_original(request)
+
+    # tools/list: merge local + remote tool lists
+    if method == "tools/list":
+        local_response = dispatch_original(request)
+        target_host, target_port = _get_target_for_session()
+        try:
+            pool = _get_pool_for(target_host, target_port)
+            request_bytes = json.dumps(request_obj).encode("utf-8")
+            with pool.get_connection() as conn:
+                conn.request("POST", "/mcp", request_bytes, {"Content-Type": "application/json"})
+                response = conn.getresponse()
+                remote_response = json.loads(response.read().decode())
+            # Merge: local tools + remote tools (skip duplicates)
+            if local_response and "result" in local_response:
+                local_tools = local_response["result"].get("tools", [])
+                remote_tools = remote_response.get("result", {}).get("tools", []) if remote_response else []
+                local_names = {t["name"] for t in local_tools}
+                merged = local_tools + [t for t in remote_tools if t["name"] not in local_names]
+                local_response["result"]["tools"] = merged
+            return local_response
+        except Exception:
+            return dispatch_original(request)  # fallback: local tools only
+
+    # tools/call: route local tools directly, proxy the rest
+    if method == "tools/call":
+        tool_name = request_obj.get("params", {}).get("name", "")
+        if tool_name in _LOCAL_TOOLS:
+            return dispatch_original(request)
 
     # Resolve target IDA instance for this session
     target_host, target_port = _get_target_for_session()

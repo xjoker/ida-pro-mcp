@@ -48,6 +48,7 @@ class IDASessionManager:
     def __init__(self):
         self._sessions: Dict[str, IDASession] = {}
         self._current_session_id: Optional[str] = None
+        self._transport_bindings: dict[str, str] = {}
         self._lock = threading.RLock()
         logger.info("IDASessionManager initialized")
 
@@ -81,7 +82,13 @@ class IDASessionManager:
             for sid, session in self._sessions.items():
                 if session.input_path.resolve() == input_path.resolve():
                     logger.info(f"Binary already open in session: {sid}")
-                    self._current_session_id = sid
+                    if self._current_session_id != sid:
+                        # Actually switch to the existing session's database
+                        if self._current_session_id is not None:
+                            idapro.close_database()
+                        if idapro.open_database(str(input_path), run_auto_analysis=False):
+                            raise RuntimeError(f"Failed to reopen database for session: {sid}")
+                        self._current_session_id = sid
                     session.last_accessed = datetime.now()
                     return sid
 
@@ -146,9 +153,12 @@ class IDASessionManager:
                 idapro.close_database()
                 self._current_session_id = None
 
-            # Remove session
+            # Remove session and clean up stale transport bindings
             del self._sessions[session_id]
-            logger.info(f"Session closed: {session_id}")
+            stale_keys = [k for k, v in self._transport_bindings.items() if v == session_id]
+            for k in stale_keys:
+                del self._transport_bindings[k]
+            logger.info(f"Session closed: {session_id} (cleaned {len(stale_keys)} transport bindings)")
             return True
 
     def switch_session(self, session_id: str) -> bool:
@@ -234,8 +244,6 @@ class IDASessionManager:
     # Transport Session Binding (isolated contexts)
     # ================================================================
 
-    _transport_bindings: dict[str, str] = {}  # transport_session_id -> ida_session_id
-
     def bind_transport_session(self, transport_id: str, session_id: str) -> None:
         """Bind a transport session to an IDA session for isolated context."""
         with self._lock:
@@ -258,15 +266,21 @@ class IDASessionManager:
         if not transport_id:
             return self._current_session_id
 
+        # Check binding under lock, then release before switching (avoids long hold)
+        needs_switch = False
+        bound_id = None
         with self._lock:
             bound_id = self._transport_bindings.get(transport_id)
-            if bound_id and bound_id != self._current_session_id:
-                if bound_id in self._sessions:
-                    try:
-                        self.switch_session(bound_id)
-                    except Exception as e:
-                        logger.warning(f"Failed to switch context for transport {transport_id}: {e}")
-            return self._current_session_id
+            if bound_id and bound_id != self._current_session_id and bound_id in self._sessions:
+                needs_switch = True
+
+        if needs_switch and bound_id:
+            try:
+                self.switch_session(bound_id)
+            except Exception as e:
+                logger.warning(f"Failed to switch context for transport {transport_id}: {e}")
+
+        return self._current_session_id
 
     def close_all_sessions(self):
         """Close all sessions and databases"""
