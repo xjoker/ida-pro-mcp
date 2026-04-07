@@ -230,6 +230,44 @@ class IDASessionManager:
         with self._lock:
             return self._sessions.get(session_id)
 
+    # ================================================================
+    # Transport Session Binding (isolated contexts)
+    # ================================================================
+
+    _transport_bindings: dict[str, str] = {}  # transport_session_id -> ida_session_id
+
+    def bind_transport_session(self, transport_id: str, session_id: str) -> None:
+        """Bind a transport session to an IDA session for isolated context."""
+        with self._lock:
+            if session_id not in self._sessions:
+                raise ValueError(f"Session not found: {session_id}")
+            self._transport_bindings[transport_id] = session_id
+            logger.debug(f"Bound transport {transport_id} -> session {session_id}")
+
+    def get_session_for_transport(self, transport_id: str) -> str | None:
+        """Get the IDA session bound to a transport session."""
+        with self._lock:
+            return self._transport_bindings.get(transport_id)
+
+    def ensure_context_for_transport(self, transport_id: str | None) -> str | None:
+        """Activate the IDA session bound to the given transport session.
+
+        If the transport has a binding and it differs from the current session,
+        switches to the bound session. Returns the active session ID.
+        """
+        if not transport_id:
+            return self._current_session_id
+
+        with self._lock:
+            bound_id = self._transport_bindings.get(transport_id)
+            if bound_id and bound_id != self._current_session_id:
+                if bound_id in self._sessions:
+                    try:
+                        self.switch_session(bound_id)
+                    except Exception as e:
+                        logger.warning(f"Failed to switch context for transport {transport_id}: {e}")
+            return self._current_session_id
+
     def close_all_sessions(self):
         """Close all sessions and databases"""
         with self._lock:
@@ -240,6 +278,7 @@ class IDASessionManager:
                 self._current_session_id = None
 
             self._sessions.clear()
+            self._transport_bindings.clear()
             logger.info("All sessions closed")
 
 

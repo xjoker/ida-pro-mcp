@@ -12,7 +12,7 @@ from ida_pro_mcp.ida_mcp import MCP_SERVER
 """IDALib-specific MCP tools for managing multiple binary sessions
 """
 from typing import Annotated, Optional
-from ida_pro_mcp.ida_mcp.rpc import tool
+from ida_pro_mcp.ida_mcp.rpc import tool, get_current_transport_session_id
 from ida_pro_mcp.idalib_session_manager import get_session_manager
 
 
@@ -67,9 +67,15 @@ def idalib_open(
                 "error": f"Failed to retrieve session after opening: {session_id_result}"
             }
 
+        # Auto-bind transport session to this IDA session
+        transport_id = get_current_transport_session_id()
+        if transport_id:
+            manager.bind_transport_session(transport_id, session_id_result)
+
         return {
             "success": True,
             "session": session.to_dict(),
+            "transport_session": transport_id,
             "message": f"Binary opened successfully: {session.input_path.name}",
         }
     except FileNotFoundError as e:
@@ -154,9 +160,15 @@ def idalib_switch(session_id: Annotated[str, "Session ID to switch to"]) -> dict
             if session is None:
                 return {"error": "Failed to retrieve current session after switching"}
 
+            # Auto-bind transport session after switch
+            transport_id = get_current_transport_session_id()
+            if transport_id:
+                manager.bind_transport_session(transport_id, session_id)
+
             return {
                 "success": True,
                 "session": session.to_dict(),
+                "transport_session": transport_id,
                 "message": f"Switched to session: {session_id} ({session.input_path.name})",
             }
     except ValueError as e:
@@ -273,6 +285,33 @@ def idalib_current() -> dict:
 logger = logging.getLogger(__name__)
 
 
+def _install_context_hooks(session_manager):
+    """Install hooks on tools/call and resources/read for per-session context activation.
+
+    Before dispatching any tool call or resource read, the hook checks the current
+    transport session ID and activates the bound IDA session if needed.
+    """
+    # Hook tools/call
+    original_tools_call = MCP_SERVER.registry.methods.get("tools/call")
+    if original_tools_call:
+        def tools_call_with_context(name, arguments=None, _meta=None):
+            transport_id = get_current_transport_session_id()
+            session_manager.ensure_context_for_transport(transport_id)
+            return original_tools_call(name, arguments, _meta)
+        MCP_SERVER.registry.methods["tools/call"] = tools_call_with_context
+
+    # Hook resources/read
+    original_resources_read = MCP_SERVER.registry.methods.get("resources/read")
+    if original_resources_read:
+        def resources_read_with_context(uri, _meta=None):
+            transport_id = get_current_transport_session_id()
+            session_manager.ensure_context_for_transport(transport_id)
+            return original_resources_read(uri, _meta)
+        MCP_SERVER.registry.methods["resources/read"] = resources_read_with_context
+
+    logger.info("Installed isolated context hooks for tools/call and resources/read")
+
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for IDA Pro via idalib")
     parser.add_argument(
@@ -343,6 +382,9 @@ def main():
 
     signal.signal(signal.SIGINT, cleanup_and_exit)
     signal.signal(signal.SIGTERM, cleanup_and_exit)
+
+    # Install context activation hooks for isolated sessions
+    _install_context_hooks(session_manager)
 
     # NOTE: npx -y @modelcontextprotocol/inspector for debugging
     # TODO: with background=True the main thread (this one) does not fake any
