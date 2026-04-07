@@ -1,17 +1,21 @@
+from typing import Annotated
+
 import idaapi
 import idautils
 import idc
+import ida_funcs
 import ida_hexrays
 import ida_bytes
 import ida_typeinf
 import ida_frame
 import ida_dirtree
 
-from .rpc import tool
+from .rpc import tool, unsafe
 from .sync import idasync, IDAError
 from .cache import invalidate_function_caches, decompile_cache
 from .utils import (
     parse_address,
+    normalize_dict_list,
     decompile_checked,
     refresh_decompiler_ctext,
     CommentOp,
@@ -404,3 +408,179 @@ def rename(batch: RenameBatch) -> dict:
         result["stack"] = _rename_stack(_normalize_items(batch["stack"]))
 
     return result
+
+
+# ============================================================================
+# Comment Append
+# ============================================================================
+
+
+@tool
+@idasync
+def append_comments(
+    items: Annotated[
+        list[CommentOp] | CommentOp,
+        "Comments to append (deduplicates: skips if text already present)",
+    ],
+) -> list[dict]:
+    """Append text to existing comments (with deduplication)"""
+    if isinstance(items, dict):
+        items = [items]
+
+    results = []
+    for item in items:
+        addr_str = item.get("addr", "")
+        new_text = item.get("comment", "").strip()
+        if not new_text:
+            results.append({"addr": addr_str, "error": "Empty comment text"})
+            continue
+
+        try:
+            ea = parse_address(addr_str)
+
+            # Determine scope: function comment or line comment
+            func = idaapi.get_func(ea)
+            if func and func.start_ea == ea:
+                # Function comment
+                existing = idc.get_func_cmt(ea, 1) or ""
+                if new_text in existing:
+                    results.append({"addr": hex(ea), "scope": "func", "skipped": True})
+                    continue
+                combined = f"{existing}\n{new_text}".strip() if existing else new_text
+                idc.set_func_cmt(ea, combined, 1)
+                results.append({"addr": hex(ea), "scope": "func", "appended": True})
+            else:
+                # Line comment
+                existing = idc.get_cmt(ea, 1) or ""
+                if new_text in existing:
+                    results.append({"addr": hex(ea), "scope": "line", "skipped": True})
+                    continue
+                combined = f"{existing}\n{new_text}".strip() if existing else new_text
+                idc.set_cmt(ea, combined, 1)
+                results.append({"addr": hex(ea), "scope": "line", "appended": True})
+
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e)})
+
+    return results
+
+
+# ============================================================================
+# Code/Function Definition
+# ============================================================================
+
+
+@tool
+@idasync
+def define_func(
+    items: Annotated[
+        list[dict] | dict | str,
+        "Addresses to define as functions: {addr, end?: str}",
+    ],
+) -> list[dict]:
+    """Create function boundaries at addresses"""
+    items = normalize_dict_list(items)
+    results = []
+
+    for item in items:
+        addr_str = item.get("addr", "") if isinstance(item, dict) else str(item)
+        end_str = item.get("end") if isinstance(item, dict) else None
+
+        try:
+            ea = parse_address(addr_str)
+
+            # Check if function already exists
+            existing = idaapi.get_func(ea)
+            if existing and existing.start_ea == ea:
+                results.append({
+                    "addr": hex(ea),
+                    "error": f"Function already exists at {hex(ea)}",
+                    "name": idaapi.get_func_name(ea),
+                })
+                continue
+
+            end_ea = parse_address(end_str) if end_str else idaapi.BADADDR
+            success = ida_funcs.add_func(ea, end_ea)
+            if success:
+                results.append({
+                    "addr": hex(ea),
+                    "name": idaapi.get_func_name(ea) or "",
+                    "end": hex(ida_funcs.get_func(ea).end_ea),
+                })
+            else:
+                results.append({"addr": hex(ea), "error": "Failed to create function"})
+
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e)})
+
+    return results
+
+
+@tool
+@idasync
+def define_code(
+    addrs: Annotated[list[str] | str, "Addresses to convert to code"],
+) -> list[dict]:
+    """Force disassembly at addresses (convert bytes to instructions)"""
+    from .utils import normalize_list_input
+    import ida_ua
+
+    addrs = normalize_list_input(addrs)
+    results = []
+
+    for addr_str in addrs:
+        try:
+            ea = parse_address(addr_str)
+            insn_len = ida_ua.create_insn(ea)
+            if insn_len > 0:
+                results.append({
+                    "addr": hex(ea),
+                    "size": insn_len,
+                    "disasm": idc.generate_disasm_line(ea, 0).strip(),
+                })
+            else:
+                results.append({"addr": hex(ea), "error": "Failed to create instruction"})
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e)})
+
+    return results
+
+
+@tool
+@idasync
+@unsafe
+def undefine(
+    items: Annotated[
+        list[dict] | dict | str,
+        "Addresses to undefine: {addr, size?: int, end?: str}",
+    ],
+) -> list[dict]:
+    """Revert addresses to raw undefined bytes (destructive)"""
+    items = normalize_dict_list(items)
+    results = []
+
+    for item in items:
+        addr_str = item.get("addr", "") if isinstance(item, dict) else str(item)
+        try:
+            ea = parse_address(addr_str)
+
+            # Determine size
+            if "end" in item:
+                end_ea = parse_address(item["end"])
+                size = end_ea - ea
+            elif "size" in item:
+                size = int(item["size"])
+            else:
+                size = ida_bytes.get_item_size(ea)
+                if size <= 0:
+                    size = 1
+
+            success = ida_bytes.del_items(ea, ida_bytes.DELIT_EXPAND, size)
+            results.append({
+                "addr": hex(ea),
+                "size": size,
+                "ok": success,
+            })
+
+        except Exception as e:
+            results.append({"addr": addr_str, "error": str(e)})

@@ -177,3 +177,74 @@ def py_eval(
     finally:
         sys.stdout = old_stdout
         sys.stderr = old_stderr
+
+
+@tool
+@idasync
+@unsafe
+def py_exec_file(
+    path: Annotated[str, "Absolute path to Python script file"],
+) -> dict:
+    """Execute a Python script file in IDA context.
+    The script has access to all IDA API modules.
+    Returns dict with stdout/stderr output."""
+    import os
+    import traceback
+
+    if not os.path.isabs(path):
+        return {"result": "", "stdout": "", "stderr": f"Path must be absolute: {path}"}
+
+    if not os.path.isfile(path):
+        return {"result": "", "stdout": "", "stderr": f"File not found: {path}"}
+
+    try:
+        with open(path, encoding="utf-8") as f:
+            code = f.read()
+    except Exception as e:
+        return {"result": "", "stdout": "", "stderr": f"Failed to read file: {e}"}
+
+    # Build execution globals with all IDA modules
+    exec_globals = {
+        "__name__": "__main__",
+        "__file__": path,
+        "idaapi": idaapi,
+        "idc": idc,
+        "idautils": __import__("idautils"),
+        "ida_bytes": ida_bytes,
+        "ida_funcs": ida_funcs,
+        "ida_hexrays": ida_hexrays,
+        "ida_ida": ida_ida,
+        "ida_nalt": ida_nalt,
+        "ida_name": ida_name,
+        "ida_typeinf": ida_typeinf,
+        "ida_segment": ida_segment,
+        "ida_xref": ida_xref,
+        "ida_entry": ida_entry,
+        "ida_frame": ida_frame,
+        "ida_kernwin": ida_kernwin,
+        "ida_lines": ida_lines,
+        "ida_dbg": ida_dbg,
+    }
+
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    sys.stdout = stdout_capture
+    sys.stderr = stderr_capture
+
+    try:
+        exec(compile(code, path, "exec"), exec_globals)
+        return {
+            "result": "",
+            "stdout": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue(),
+        }
+    except Exception:
+        return {
+            "result": "",
+            "stdout": stdout_capture.getvalue(),
+            "stderr": stderr_capture.getvalue() + "\n" + traceback.format_exc(),
+        }
+    finally:
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr

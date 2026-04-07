@@ -478,3 +478,245 @@ def infer_types(
             )
 
     return results
+
+
+# ============================================================================
+# Enum Operations
+# ============================================================================
+
+
+@tool
+@idasync
+def enum_upsert(
+    queries: Annotated[
+        list[dict] | dict,
+        "Enum definitions: {name, members: [{name, value}], bitfield?: bool}",
+    ],
+) -> list[dict]:
+    """Create or update enums idempotently (skip existing members with same value)"""
+    from .utils import normalize_dict_list
+
+    items = normalize_dict_list(queries)
+    results = []
+
+    for item in items:
+        enum_name = item.get("name", "")
+        members = item.get("members", [])
+        is_bitfield = bool(item.get("bitfield", False))
+
+        if not enum_name or not members:
+            results.append({"name": enum_name, "error": "Missing name or members"})
+            continue
+
+        try:
+            til = ida_typeinf.get_idati()
+
+            # Check if enum already exists
+            tif = ida_typeinf.tinfo_t()
+            existing = tif.get_named_type(til, enum_name, ida_typeinf.BTF_ENUM)
+
+            member_results = []
+            if existing:
+                # Update existing enum
+                ed = ida_typeinf.enum_type_data_t()
+                if not tif.get_enum_details(ed):
+                    results.append({"name": enum_name, "error": "Failed to read enum details"})
+                    continue
+
+                # Check bitfield consistency
+                if is_bitfield != ed.is_bf():
+                    results.append({"name": enum_name, "error": "Bitfield flag mismatch with existing enum"})
+                    continue
+
+                for m in members:
+                    m_name = m.get("name", "")
+                    m_value = int(m.get("value", 0))
+
+                    # Check if member already exists
+                    found = False
+                    for i in range(ed.get_nmembers()):
+                        em = ed.get_member(i)
+                        if em.name == m_name:
+                            if em.value == m_value:
+                                member_results.append({"name": m_name, "status": "skipped"})
+                            else:
+                                member_results.append({"name": m_name, "status": "conflict",
+                                                       "error": f"Exists with value {em.value}, wanted {m_value}"})
+                            found = True
+                            break
+                    if not found:
+                        em = ida_typeinf.edm_t()
+                        em.name = m_name
+                        em.value = m_value
+                        ed.push_back(em)
+                        member_results.append({"name": m_name, "status": "created"})
+
+                # Apply updated enum
+                tif2 = ida_typeinf.tinfo_t()
+                tif2.create_enum(ed)
+                tif2.set_named_type(til, enum_name, ida_typeinf.NTF_REPLACE)
+
+            else:
+                # Create new enum
+                ed = ida_typeinf.enum_type_data_t()
+                if is_bitfield:
+                    ed.set_bf(True)
+                for m in members:
+                    em = ida_typeinf.edm_t()
+                    em.name = m.get("name", "")
+                    em.value = int(m.get("value", 0))
+                    ed.push_back(em)
+                    member_results.append({"name": em.name, "status": "created"})
+
+                tif = ida_typeinf.tinfo_t()
+                tif.create_enum(ed)
+                tif.set_named_type(til, enum_name, ida_typeinf.NTF_TYPE)
+
+            results.append({"name": enum_name, "members": member_results, "error": None})
+
+        except Exception as e:
+            results.append({"name": enum_name, "error": str(e)})
+
+    return results
+
+
+# ============================================================================
+# Type Catalog Queries
+# ============================================================================
+
+
+@tool
+@idasync
+def type_query(
+    queries: Annotated[
+        list[dict] | dict | str,
+        "Type search: {pattern, kind?: 'struct'|'enum'|'typedef'|'any', offset?: int, count?: int}",
+    ],
+) -> list[dict]:
+    """Search the local type library by name pattern and kind"""
+    from .utils import normalize_dict_list, pattern_filter
+
+    items = normalize_dict_list(queries)
+    results = []
+
+    til = ida_typeinf.get_idati()
+    qty = ida_typeinf.get_ordinal_qty(til)
+
+    for query in items:
+        pattern = query.get("pattern", "*") if isinstance(query, dict) else str(query)
+        kind_filter = query.get("kind", "any") if isinstance(query, dict) else "any"
+        offset = int(query.get("offset", 0)) if isinstance(query, dict) else 0
+        count = min(int(query.get("count", 100)) if isinstance(query, dict) else 100, 5000)
+
+        matching = []
+        for ordinal in range(1, qty):
+            tif = ida_typeinf.tinfo_t()
+            if not tif.get_numbered_type(til, ordinal):
+                continue
+
+            name = tif.get_type_name()
+            if not name:
+                continue
+
+            # Kind filter
+            if kind_filter != "any":
+                if kind_filter == "struct" and not tif.is_struct():
+                    continue
+                if kind_filter == "union" and not tif.is_union():
+                    continue
+                if kind_filter == "enum" and not tif.is_enum():
+                    continue
+                if kind_filter == "typedef" and not tif.is_typeref():
+                    continue
+                if kind_filter == "udt" and not (tif.is_struct() or tif.is_union()):
+                    continue
+
+            matching.append({
+                "name": name,
+                "ordinal": ordinal,
+                "size": tif.get_size() if tif.get_size() != idaapi.BADSIZE else None,
+                "kind": "struct" if tif.is_struct() else "union" if tif.is_union() else "enum" if tif.is_enum() else "typedef" if tif.is_typeref() else "other",
+            })
+
+        # Pattern filter
+        if pattern != "*":
+            matching = pattern_filter(matching, "name", pattern)
+
+        total = len(matching)
+        paged = matching[offset : offset + count]
+        next_offset = offset + count if offset + count < total else None
+
+        results.append({
+            "pattern": pattern,
+            "types": paged,
+            "total": total,
+            "next_offset": next_offset,
+        })
+
+    return results
+
+
+@tool
+@idasync
+def type_inspect(
+    names: Annotated[list[str] | str, "Type names to inspect"],
+) -> list[dict]:
+    """Inspect named types in detail (members, size, alignment, dependencies)"""
+    from .utils import normalize_list_input
+
+    names = normalize_list_input(names)
+    results = []
+    til = ida_typeinf.get_idati()
+
+    for name in names:
+        try:
+            tif = ida_typeinf.tinfo_t()
+            if not tif.get_named_type(til, name):
+                results.append({"name": name, "error": f"Type '{name}' not found"})
+                continue
+
+            info: dict = {
+                "name": name,
+                "size": tif.get_size() if tif.get_size() != idaapi.BADSIZE else None,
+                "kind": "struct" if tif.is_struct() else "union" if tif.is_union() else "enum" if tif.is_enum() else "typedef" if tif.is_typeref() else "other",
+            }
+
+            # Declaration string
+            decl = tif.dstr()
+            if decl:
+                info["decl"] = decl
+
+            # Members for UDT
+            if tif.is_struct() or tif.is_union():
+                udt = ida_typeinf.udt_type_data_t()
+                if tif.get_udt_details(udt):
+                    members = []
+                    for i in range(udt.size()):
+                        m = udt[i]
+                        members.append({
+                            "name": m.name,
+                            "offset": m.offset // 8,
+                            "size": m.size // 8 if m.size > 0 else 0,
+                            "type": m.type.dstr() if m.type else "",
+                        })
+                    info["members"] = members[:200]
+                    if len(members) > 200:
+                        info["members_truncated"] = True
+
+            # Members for enum
+            if tif.is_enum():
+                ed = ida_typeinf.enum_type_data_t()
+                if tif.get_enum_details(ed):
+                    members = []
+                    for i in range(ed.get_nmembers()):
+                        em = ed.get_member(i)
+                        members.append({"name": em.name, "value": em.value})
+                    info["members"] = members[:500]
+                    info["is_bitfield"] = ed.is_bf()
+
+            results.append(info)
+
+        except Exception as e:
+            results.append({"name": name, "error": str(e)})
+
+    return results
