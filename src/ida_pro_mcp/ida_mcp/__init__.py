@@ -26,6 +26,8 @@ from . import api_modify
 from . import api_stack
 from . import api_debug
 from . import api_python
+from . import api_composite
+from . import api_survey
 from . import api_resources
 
 # Re-export key components for external use
@@ -49,6 +51,8 @@ __all__ = [
     "api_stack",
     "api_debug",
     "api_python",
+    "api_composite",
+    "api_survey",
     "api_resources",
     # Re-exported components
     "idasync",
