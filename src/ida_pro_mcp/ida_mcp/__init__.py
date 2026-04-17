@@ -11,6 +11,12 @@ Architecture:
 - api_*.py: Modular API implementations (76 tools + 11 resources)
 """
 
+# Ignore SIGPIPE so a client disconnecting mid-response can't kill IDA.
+# IDA's embedded Python does not reliably preserve CPython's default SIG_IGN.
+import signal as _signal
+if hasattr(_signal, "SIGPIPE"):
+    _signal.signal(_signal.SIGPIPE, _signal.SIG_IGN)
+
 # Import infrastructure modules
 from . import rpc
 from . import sync

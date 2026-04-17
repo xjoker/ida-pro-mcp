@@ -20,6 +20,7 @@ from typing import (
     overload,
 )
 
+import ida_bytes
 import ida_funcs
 import ida_hexrays
 import ida_idp
@@ -455,10 +456,51 @@ def parse_address(addr: str | int) -> int:
     try:
         return int(addr, 0)
     except ValueError:
+        # Fall back to symbol name resolution so tools documented as accepting
+        # "address or name" work uniformly. Only reach here when the input
+        # didn't parse as hex/decimal.
+        try:
+            import idaapi
+
+            ea = idaapi.get_name_ea(idaapi.BADADDR, addr.strip())
+            if ea != idaapi.BADADDR:
+                return ea
+        except ImportError:
+            pass
         for ch in addr:
             if ch not in "0123456789abcdefABCDEF":
-                raise IDAError(f"Failed to parse address: {addr}")
+                raise IDAError(f"Not found: {addr!r}")
         raise IDAError(f"Failed to parse address (missing 0x prefix): {addr}")
+
+
+def read_bytes_bss_safe(ea: int, size: int) -> bytes:
+    """Read `size` bytes starting at `ea`, substituting 0 for unloaded bytes.
+
+    `ida_bytes.get_byte()` returns 0xFF as a sentinel for bytes not backed by
+    the IDB (e.g. `.bss`), but those bytes are zero-initialized at runtime.
+    Gate every byte on `is_loaded()` so reads of globals in BSS-like sections
+    return true zeros instead of 0xff garbage.
+    """
+    out = bytearray(size)
+    for i in range(size):
+        if ida_bytes.is_loaded(ea + i):
+            out[i] = ida_bytes.get_byte(ea + i)
+    return bytes(out)
+
+
+def read_int_bss_safe(ea: int, size: int) -> int:
+    """Read an integer of `size` bytes at `ea`, honoring IDB endianness.
+
+    Each byte is gated on `is_loaded()` via read_bytes_bss_safe — a value that
+    straddles a BSS boundary won't leak 0xFF into the unloaded half.
+    """
+    if size not in (1, 2, 4, 8):
+        raise ValueError(f"unsupported integer size: {size}")
+    import ida_ida
+
+    raw = read_bytes_bss_safe(ea, size)
+    byteorder = "big" if ida_ida.inf_is_be() else "little"
+    return int.from_bytes(raw, byteorder)
 
 
 def normalize_list_input(value: list | str) -> list:
@@ -982,9 +1024,13 @@ def decompile_function_safe(ea: int) -> Optional[str]:
         lines = []
         for sl in sv:
             sl: ida_kernwin.simpleline_t
+            # Passing None for the head/tail output params of get_line_item can
+            # null-pointer-write inside IDA; allocate throwaway ctree_item_t's.
+            _head = ida_hexrays.ctree_item_t()
             item = ida_hexrays.ctree_item_t()
+            _tail = ida_hexrays.ctree_item_t()
             line_ea = None
-            if cfunc.get_line_item(sl.line, 0, False, None, item, None):
+            if cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
                 dstr: str | None = item.dstr()
                 if dstr:
                     ds = dstr.split(": ")

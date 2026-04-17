@@ -425,6 +425,9 @@ class McpServer:
         self.registry.methods["notifications/cancelled"] = (
             self._mcp_notifications_cancelled
         )
+        self.registry.methods["notifications/initialized"] = (
+            self._mcp_notifications_initialized
+        )
 
     def get_current_transport_session_id(self) -> str | None:
         """Return the transport session ID for the current request thread."""
@@ -684,6 +687,10 @@ class McpServer:
         """MCP notifications/cancelled - cancel an in-flight request"""
         if cancel_request(requestId):
             print(f"[MCP] Cancelled request {requestId}: {reason or 'no reason'}")
+        # Notifications don't return a response
+
+    def _mcp_notifications_initialized(self) -> None:
+        """MCP notifications/initialized - client signals handshake complete."""
         # Notifications don't return a response
 
     def _mcp_resources_list(self, _meta: dict | None = None) -> dict:
