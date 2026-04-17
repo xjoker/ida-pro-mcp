@@ -107,6 +107,11 @@ TOOL_DESCRIPTIONS = {
 
     # Python
     "py_eval": ("⚠️ Execute Python code in IDA", "⚠️ 在 IDA 中执行 Python 代码"),
+
+    # Async tasks
+    "task_submit": ("Submit tool as background task", "提交工具为后台任务"),
+    "task_poll": ("Poll background task status/result", "查询后台任务状态/结果"),
+    "task_list": ("List active background tasks", "列出活跃后台任务"),
 }
 
 # 国际化文本 / Internationalization texts

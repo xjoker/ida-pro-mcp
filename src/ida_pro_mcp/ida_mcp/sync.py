@@ -118,7 +118,13 @@ def _sync_wrapper(ff):
             call_stack.get()
 
     idaapi.execute_sync(runned, idaapi.MFF_WRITE)
-    res = res_container.get()
+    # Upper bound on queue-wait + execution; must stay < proxy HTTP timeout (180s)
+    # so IDA surfaces a structured error before the transport gives up.
+    try:
+        res = res_container.get(timeout=150.0)
+    except queue.Empty:
+        # Don't return queue to pool — runned() may still fire later and put a result in it
+        raise IDASyncError(f"IDA main thread did not respond within 150s for {ff.__name__!r}")
     _queue_pool.release(res_container)
     if isinstance(res, Exception):
         raise res

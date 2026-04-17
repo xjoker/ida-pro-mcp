@@ -36,7 +36,7 @@ class ConnectionPool:
     Thread-safe implementation with automatic connection recycling.
     """
 
-    def __init__(self, host: str, port: int, max_size: int = 10, timeout: float = 30.0):
+    def __init__(self, host: str, port: int, max_size: int = 10, timeout: float = 180.0):
         self.host = host
         self.port = port
         self.max_size = max_size
@@ -82,11 +82,15 @@ class ConnectionPool:
         try:
             # Verify connection is still alive if reused
             if reused:
+                stale = False
                 try:
-                    # Check if connection is still valid
-                    conn.sock  # Access sock to verify connection state
-                except Exception:
-                    # Connection broken, create new one
+                    if conn.sock is None:
+                        stale = True
+                    else:
+                        conn.sock.fileno()  # raises OSError if fd closed
+                except OSError:
+                    stale = True
+                if stale:
                     try:
                         conn.close()
                     except Exception:
