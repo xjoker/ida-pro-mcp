@@ -88,6 +88,35 @@ ida-pro-mcp --transport http://127.0.0.1:8744/sse
 idalib-mcp --host 127.0.0.1 --port 8745 /path/to/binary
 ```
 
+## 多机部署（v1.4 预览版）
+
+Coordinator + Worker Pool + Redis 架构，支持水平扩展。
+
+```bash
+# 1. 在共享主机上启动 Redis
+docker run -d -p 6379:6379 redis:7-alpine
+
+# 2. 在每台 IDA 主机上启动 worker（自动注册到 Redis）
+idalib-mcp --host 0.0.0.0 --port 13337 \
+  --registry-url redis://redis-host:6379/0 \
+  /path/to/binary.idb
+
+# 3. 启动 Coordinator（MCP 客户端的唯一入口）
+ida-mcp-coordinator --host 0.0.0.0 --port 9000 \
+  --registry-url redis://redis-host:6379/0
+
+# 4. MCP 客户端指向 Coordinator
+# Coordinator 按 IDB 亲和性 + 负载均衡自动路由
+```
+
+可选：启用跨主机共享任务队列：
+```bash
+export IDA_MCP_TASKS_BACKEND=redis
+export IDA_MCP_REGISTRY_REDIS_URL=redis://redis-host:6379/0
+```
+
+向后兼容：不传 `--registry-url` 仍按单机模式运行。
+
 ## 链接
 
 - [原项目](https://github.com/mrexodia/ida-pro-mcp) by mrexodia

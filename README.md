@@ -17,6 +17,7 @@ An enhanced fork of [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-m
 | **Server Startup** | Manual hotkey | ✅ Auto-start on IDA launch |
 | **Hotkey Conflicts** | Occupies Ctrl+Alt+M | ✅ No hotkey, menu-only |
 | **Config Persistence** | None | ✅ Saved per IDB database |
+| **Multi-Host Deployment** | ❌ Single machine only | ✅ Coordinator + Worker Pool + Redis (v1.4 preview) |
 
 ### Key Enhancements
 
@@ -87,6 +88,35 @@ ida-pro-mcp --transport http://127.0.0.1:8744/sse
 # With idalib (no GUI)
 idalib-mcp --host 127.0.0.1 --port 8745 /path/to/binary
 ```
+
+## Multi-Host Deployment (v1.4 preview)
+
+Coordinator + Worker Pool + Redis architecture for horizontal scaling.
+
+```bash
+# 1. Start Redis on a shared host
+docker run -d -p 6379:6379 redis:7-alpine
+
+# 2. Start workers on each IDA host (auto register to Redis)
+idalib-mcp --host 0.0.0.0 --port 13337 \
+  --registry-url redis://redis-host:6379/0 \
+  /path/to/binary.idb
+
+# 3. Start Coordinator (single entry point for MCP clients)
+ida-mcp-coordinator --host 0.0.0.0 --port 9000 \
+  --registry-url redis://redis-host:6379/0
+
+# 4. Point MCP clients at the Coordinator
+# Coordinator routes by IDB affinity + load balancing.
+```
+
+Optional: enable cross-host shared task queue:
+```bash
+export IDA_MCP_TASKS_BACKEND=redis
+export IDA_MCP_REGISTRY_REDIS_URL=redis://redis-host:6379/0
+```
+
+Backward compatible: omit `--registry-url` to run single-host as before.
 
 ## Links
 

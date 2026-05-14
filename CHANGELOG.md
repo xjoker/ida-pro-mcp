@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 1.4.0.dev1 (2026-05-14)
+
+**多机部署预览版**：通过 Coordinator + Worker Pool + Redis 架构，把单机 IDA MCP server 升级为可横向扩展的分布式集群。本版本是 dev preview，所有新功能默认关闭（无 Redis URL 即按 1.3 行为运行），向后 100% 兼容。
+
+通过 Agent Team 并行执行 6 个 wave 完成，新增 158 个测试，零新增 lint 错误。
+
+### Features
+
+- **`ida-mcp-coordinator` 新入口** — 多机部署的单一 MCP 入口，对客户端透明
+  - CLI 用法：`ida-mcp-coordinator --port 9000 --registry-url redis://host:6379/0`
+  - 或静态 worker 列表：`ida-mcp-coordinator --port 9000 --worker host1:13337 --worker host2:13338`
+  - `GET /coordinator/health` 端点暴露 worker 列表 + Registry 状态
+- **Redis Worker Registry**（`src/ida_pro_mcp/distributed/registry.py`）
+  - `register/deregister/heartbeat/list_workers/find_by_idb/select_best`
+  - Schema: `{ns}:worker:{id}` HASH（TTL 15s）+ `{ns}:workers:active` SET + `{ns}:idb:{sha256}` 反向索引 SET
+  - 命名空间隔离支持多租户共享 Redis
+  - 异常包装为 `RegistryError`，不泄漏原 redis 异常
+- **智能路由**（`RegistryRouter`）
+  - IDB 亲和性优先（从 `tools/call.arguments.database` / `idb_path` / `input_path` 提取）
+  - Fallback 到负载最低的 worker（score = in_flight×1.0 + has_loaded_idb×0.5）
+  - 无 worker 可用 → `-32001 No worker available` + HTTP 503
+  - `list_workers` 缓存 1s，避免高频健康检查打爆 Redis
+- **Worker 生命周期管理**（`WorkerLifecycle`）
+  - `idalib_server` 接入：`--registry-url` 启用时自动 register / 5s 心跳 / SIGTERM 自动 deregister
+  - daemon heartbeat 线程，name `WorkerHeartbeat-{worker_id_short}`
+  - Registry 故障只记 warning，不让 worker 崩溃
+- **Task Backend 后端抽象 + Redis 实现**
+  - `TaskBackend` ABC（create_task / update_state / get_task / list_tasks / delete_expired / healthcheck）
+  - `InMemoryTaskBackend`（默认，行为与 1.3 完全一致）
+  - `RedisTaskBackend`（v1.4 新增）：跨节点共享 task 状态，pipeline 原子操作
+  - 通过 `IDA_MCP_TASKS_BACKEND=memory|redis` + `IDA_MCP_REGISTRY_REDIS_URL` 环境变量切换
+
+### 新增依赖
+
+- `redis>=5.0`（runtime）
+- `fakeredis>=2.20.0`（dev，测试用）
+
+### 文件清单
+
+```
+src/ida_pro_mcp/coordinator.py                     # 新入口（420 行）
+src/ida_pro_mcp/distributed/                       # 新包
+    __init__.py
+    protocol.py                                    # WorkerInfo / RoutingDecision / HeartbeatPayload
+    registry.py                                    # Redis Registry（335 行）
+    router.py                                      # Router ABC + MockRouter + RegistryRouter（270 行）
+    forwarder.py                                   # HTTP forward（123 行）
+    worker_lifecycle.py                            # 注册-心跳-注销生命周期（251 行）
+src/ida_pro_mcp/ida_mcp/task_backend.py            # 后端抽象（369 行）
+tests/test_coordinator.py                          # 31 测试
+tests/test_registry.py                             # 24 测试
+tests/test_registry_router.py                     # 30 测试
+tests/test_redis_task_backend.py                   # 24 测试
+tests/test_task_backend.py                         # 21 测试
+tests/test_worker_lifecycle.py                     # 19 测试
+```
+
+### 向后兼容性
+
+- 默认行为（不设 `--registry-url` / `IDA_MCP_TASKS_BACKEND` 未设置或为 `memory`）与 1.3 完全一致
+- 现有 `ida-pro-mcp` / `idalib-mcp` CLI 行为不变
+- 现有 MCP 客户端连接 `idalib-mcp` 或 GUI server 均无需改动
+
+### Phase 5 尚未实现（v1.5 或 v2.0 目标）
+
+- 共享 IDB 文件存储（NFS / S3 / SeaweedFS）—— 当前每个 worker 必须本地访问 IDB
+- Worker 故障转移时的 in-flight 任务自动重派
+- Coordinator HA（多节点 active-active）
+- 容器化支持（取决于 IDA license 类型）
+
 ## 1.3.0 (2026-05-14)
 
 本次发布从 upstream `mrexodia/ida-pro-mcp` 选择性吸收 211 个新提交（不做整体 merge），通过 Agent Team 并行执行 6 个 wave 完成。零新增 lint 错误，全部 50 个 .py 文件语法校验通过，新增 58+ 个回归测试。

@@ -1,6 +1,6 @@
 [project]
 name = "ida-pro-mcp-xjoker"
-version = "1.3.0"
+version = "1.4.0.dev1"
 description = "Vibe reversing with IDA Pro (enhanced fork)"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -57,7 +57,7 @@ dev = [
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.3.0"
+version = "1.4.0.dev1"
 version_files = [
     "pyproject.toml:^version"
 ]
