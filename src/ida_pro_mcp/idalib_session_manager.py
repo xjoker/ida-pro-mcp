@@ -21,6 +21,36 @@ logger = logging.getLogger(__name__)
 # Maximum number of transport→session bindings retained (LRU eviction).
 _MAX_TRANSPORT_BINDINGS = 256
 
+# Maximum seconds to wait for auto-analysis before giving up and continuing.
+# Mirrors upstream's RPC timeout bounding: avoids blocking all other transports.
+_AUTO_ANALYSIS_TIMEOUT_SECS = 300  # 5 minutes; tune via subclass or config
+
+
+def _auto_wait_with_timeout(timeout_secs: float = _AUTO_ANALYSIS_TIMEOUT_SECS) -> bool:
+    """Run ida_auto.auto_wait() in a daemon thread with a wall-clock timeout.
+
+    Returns True when analysis finishes within the deadline, False if timed out.
+    On timeout the calling thread is unblocked so other transports can proceed;
+    analysis continues in the background inside IDA's auto-analysis queue.
+    """
+    completed = threading.Event()
+
+    def _wait():
+        try:
+            ida_auto.auto_wait()
+        finally:
+            completed.set()
+
+    t = threading.Thread(target=_wait, daemon=True, name="ida-auto-wait")
+    t.start()
+    finished = completed.wait(timeout=timeout_secs)
+    if not finished:
+        logger.warning(
+            "auto_wait timed out after %.0fs — analysis may still be running in background",
+            timeout_secs,
+        )
+    return finished
+
 
 @dataclass
 class IDASession:
@@ -140,14 +170,19 @@ class IDASessionManager:
             )
             self._sessions[session_id] = session
 
-            # Wait for analysis if requested
+            # Wait for analysis if requested (bounded to avoid blocking all transports)
             if run_auto_analysis:
                 logger.debug(
                     f"Waiting for auto-analysis to complete (session: {session_id})"
                 )
-                ida_auto.auto_wait()
-                session.is_analyzing = False
-                logger.info(f"Auto-analysis completed (session: {session_id})")
+                finished = _auto_wait_with_timeout()
+                session.is_analyzing = not finished
+                if finished:
+                    logger.info(f"Auto-analysis completed (session: {session_id})")
+                else:
+                    logger.warning(
+                        f"Auto-analysis still running after timeout (session: {session_id})"
+                    )
 
             logger.info(f"Session created: {session_id} for {input_path.name}")
             return session_id
