@@ -12,3 +12,4 @@ from . import test_api_modify as test_api_modify
 from . import test_api_types as test_api_types
 from . import test_api_stack as test_api_stack
 from . import test_api_resources as test_api_resources
+from . import test_trace as test_trace
