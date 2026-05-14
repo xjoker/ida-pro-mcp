@@ -90,17 +90,29 @@ class IDASessionManager:
                     if self._current_session_id != sid:
                         # Actually switch to the existing session's database
                         if self._current_session_id is not None:
-                            idapro.close_database()
-                        if idapro.open_database(str(input_path), run_auto_analysis=False):
+                            try:
+                                idapro.close_database()
+                            except Exception:
+                                logger.warning("close_database failed during reopen; forcing current_session_id = None")
+                            finally:
+                                self._current_session_id = None
+                        rc = idapro.open_database(str(input_path), run_auto_analysis=False)
+                        if rc:
+                            # open failed — current_session_id is already None above
                             raise RuntimeError(f"Failed to reopen database for session: {sid}")
                         self._current_session_id = sid
                     session.last_accessed = datetime.now()
                     return sid
 
-            # Close current database if any (Do we need to close the database first?)
+            # Close current database if any
             if self._current_session_id is not None:
                 logger.debug("Closing current database before opening new one")
-                idapro.close_database()
+                try:
+                    idapro.close_database()
+                except Exception:
+                    logger.warning("close_database failed; forcing current_session_id = None")
+                finally:
+                    self._current_session_id = None
 
             # Generate session ID
             if session_id is None:
@@ -109,10 +121,13 @@ class IDASessionManager:
             # Open the database
             logger.info(f"Opening database: {input_path} (session: {session_id})")
 
-            if idapro.open_database(
-                str(input_path), run_auto_analysis=run_auto_analysis
-            ):
+            rc = idapro.open_database(str(input_path), run_auto_analysis=run_auto_analysis)
+            if rc:
+                # current_session_id is already None; do not update it
                 raise RuntimeError(f"Failed to open database: {input_path}")
+
+            # Mark current before analysis so any exception path can clear it
+            self._current_session_id = session_id
 
             # Create session object
             session = IDASession(
@@ -120,9 +135,7 @@ class IDASessionManager:
                 input_path=input_path,
                 is_analyzing=run_auto_analysis,
             )
-
             self._sessions[session_id] = session
-            self._current_session_id = session_id
 
             # Wait for analysis if requested
             if run_auto_analysis:
@@ -155,8 +168,14 @@ class IDASessionManager:
 
             # If this is the current session, close the database
             if self._current_session_id == session_id:
-                idapro.close_database()
-                self._current_session_id = None
+                try:
+                    idapro.close_database()
+                except Exception:
+                    logger.warning(
+                        f"close_database failed for session {session_id}; forcing current_session_id = None"
+                    )
+                finally:
+                    self._current_session_id = None
 
             # Remove session and clean up stale transport bindings
             del self._sessions[session_id]
@@ -188,17 +207,24 @@ class IDASessionManager:
 
             session = self._sessions[session_id]
 
-            # Close current database
+            # Close current database; always clear the pointer regardless of outcome
             if self._current_session_id is not None:
                 logger.debug(f"Closing current session: {self._current_session_id}")
-                idapro.close_database()
+                try:
+                    idapro.close_database()
+                except Exception:
+                    logger.warning("close_database failed during switch; forcing current_session_id = None")
+                finally:
+                    self._current_session_id = None
 
             # Open the target session's database
             logger.info(
                 f"Switching to session: {session_id} ({session.input_path.name})"
             )
 
-            if idapro.open_database(str(session.input_path), run_auto_analysis=False):
+            rc = idapro.open_database(str(session.input_path), run_auto_analysis=False)
+            if rc:
+                # current_session_id is already None; do not set it
                 raise RuntimeError(f"Failed to switch to session: {session_id}")
 
             self._current_session_id = session_id
