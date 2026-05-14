@@ -10,7 +10,7 @@ Typical workflow:
 
 Backend selection (env vars):
   IDA_MCP_TASKS_BACKEND=memory   (default) – in-process InMemoryTaskBackend
-  IDA_MCP_TASKS_BACKEND=redis    – RedisTaskBackend (Wave 2C); reads URL from
+  IDA_MCP_TASKS_BACKEND=redis    – RedisTaskBackend; reads URL from
                                    IDA_MCP_REGISTRY_REDIS_URL
 """
 import os

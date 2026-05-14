@@ -1,4 +1,4 @@
-"""Unit tests for InMemoryTaskBackend (and RedisTaskBackend stub).
+"""Unit tests for InMemoryTaskBackend.
 
 No IDA dependency – pure Python only.
 Run with:
@@ -203,50 +203,17 @@ class TestConcurrency(unittest.TestCase):
         self.assertEqual(len(done_tasks), n)
 
 
-class TestRedisBackendStub(unittest.TestCase):
-    """RedisTaskBackend must be importable and raise NotImplementedError."""
-
-    def setUp(self) -> None:
-        self.backend = RedisTaskBackend("redis://localhost:6379/0")
-
-    def _assert_not_implemented(self, fn):
-        with self.assertRaises(NotImplementedError):
-            fn()
-
-    def test_create_task_raises(self) -> None:
-        self._assert_not_implemented(
-            lambda: self.backend.create_task("x", {})
-        )
-
-    def test_get_task_raises(self) -> None:
-        self._assert_not_implemented(lambda: self.backend.get_task("x"))
-
-    def test_list_tasks_raises(self) -> None:
-        self._assert_not_implemented(lambda: self.backend.list_tasks())
-
-    def test_update_state_raises(self) -> None:
-        self._assert_not_implemented(
-            lambda: self.backend.update_state("x", "done")
-        )
-
-    def test_delete_expired_raises(self) -> None:
-        self._assert_not_implemented(
-            lambda: self.backend.delete_expired(300)
-        )
-
-    def test_healthcheck_raises(self) -> None:
-        self._assert_not_implemented(lambda: self.backend.healthcheck())
-
-    def test_is_task_backend_subclass(self) -> None:
-        self.assertIsInstance(self.backend, TaskBackend)
-
-
 class TestImportContract(unittest.TestCase):
     """Public import surface must be stable."""
 
     def test_inmemory_is_taskbackend(self) -> None:
         backend = InMemoryTaskBackend()
         self.assertIsInstance(backend, TaskBackend)
+
+    def test_redis_backend_importable(self) -> None:
+        """RedisTaskBackend should be importable without connecting."""
+        self.assertTrue(issubclass(RedisTaskBackend, TaskBackend))
+
 
 
 if __name__ == "__main__":
