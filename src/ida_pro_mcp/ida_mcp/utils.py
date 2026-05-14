@@ -326,6 +326,7 @@ class DisassemblyLine(TypedDict):
     label: NotRequired[str]
     instruction: str
     comments: NotRequired[list[str]]
+    refs: NotRequired[list[dict]]
 
 
 class Argument(TypedDict):
@@ -343,10 +344,17 @@ class StackFrameVariable(TypedDict):
 class DisassemblyFunction(TypedDict):
     name: str
     start_ea: str
+    segment: NotRequired[str]
     return_type: NotRequired[str]
     arguments: NotRequired[list[Argument]]
     stack_frame: list[StackFrameVariable]
     lines: list[DisassemblyLine]
+
+
+class Ref(TypedDict):
+    addr: str
+    name: str
+    string: NotRequired[str]
 
 
 class Xref(TypedDict):
@@ -1015,7 +1023,30 @@ def decompile_checked(addr: int):
     return cfunc
 
 
-def decompile_function_safe(ea: int) -> Optional[str]:
+_STRING_OR_SPACES_RE = re.compile(
+    r'"(?:[^"\\]|\\.)*"'  # double-quoted string
+    r"|'(?:[^'\\]|\\.)*'"  # single-quoted string / char
+    r"|[ \t]{2,}"  # run of 2+ whitespace (outside strings)
+)
+
+
+def compact_whitespace(line: str) -> str:
+    """Collapse runs of 2+ spaces/tabs to a single space, preserving string literals."""
+    stripped = line.lstrip(" \t")
+    if not stripped:
+        return line
+    lead = line[: len(line) - len(stripped)]
+
+    def _repl(m: re.Match) -> str:
+        s = m.group()
+        if s[0] in ('"', "'"):
+            return s  # preserve string content
+        return " "
+
+    return lead + _STRING_OR_SPACES_RE.sub(_repl, stripped)
+
+
+def decompile_function_safe(ea: int, include_addresses: bool = True) -> Optional[str]:
     """Safely decompile a function, returning None on failure (uses cache)"""
     import ida_lines
     import ida_kernwin
@@ -1036,7 +1067,7 @@ def decompile_function_safe(ea: int) -> Optional[str]:
             item = ida_hexrays.ctree_item_t()
             _tail = ida_hexrays.ctree_item_t()
             line_ea = None
-            if cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
+            if include_addresses and cfunc.get_line_item(sl.line, 0, False, _head, item, _tail):
                 dstr: str | None = item.dstr()
                 if dstr:
                     ds = dstr.split(": ")
@@ -1045,7 +1076,7 @@ def decompile_function_safe(ea: int) -> Optional[str]:
                             line_ea = int(ds[0], 16)
                         except ValueError:
                             pass
-            text = ida_lines.tag_remove(sl.line)
+            text = compact_whitespace(ida_lines.tag_remove(sl.line))
             if line_ea is not None:
                 lines.append(f"{text} /*{line_ea:#x}*/")
             else:
