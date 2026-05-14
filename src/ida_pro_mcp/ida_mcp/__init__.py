@@ -37,6 +37,13 @@ from . import api_survey
 from . import api_resources
 from . import api_tasks
 from . import api_sigmaker
+from . import trace as trace
+
+# Tracing is always on by default: every tools/call is recorded into the IDB netnode.
+# Set IDA_MCP_TRACE=0 to disable.
+import os as _os
+if _os.environ.get("IDA_MCP_TRACE", "1") != "0":
+    trace.configure_idb()
 
 # Re-export key components for external use
 from .sync import idasync, IDAError, IDASyncError, CancelledError
@@ -64,6 +71,7 @@ __all__ = [
     "api_resources",
     "api_tasks",
     "api_sigmaker",
+    "trace",
     # Re-exported components
     "idasync",
     "IDAError",
