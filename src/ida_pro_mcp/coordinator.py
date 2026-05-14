@@ -30,7 +30,13 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ida_pro_mcp.distributed.forwarder import DEFAULT_TIMEOUT, forward_request
-from ida_pro_mcp.distributed.router import MockRouter, Router, WorkerEndpoint
+from ida_pro_mcp.distributed.router import (
+    MockRouter,
+    NoWorkerAvailableError,
+    RegistryRouter,
+    Router,
+    WorkerEndpoint,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -125,27 +131,59 @@ class CoordinatorRequestHandler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
 
     def _handle_health(self) -> None:
-        workers_status = []
-        for endpoint in self.coordinator.router.list_workers():
-            alive = _probe_worker(endpoint)
-            workers_status.append(
-                {
-                    "endpoint": str(endpoint),
-                    "host": endpoint.host,
-                    "port": endpoint.port,
-                    "alive": alive,
-                }
-            )
+        router = self.coordinator.router
+        is_registry_mode = isinstance(router, RegistryRouter)
 
-        payload = {
+        workers_status = []
+        registry_status = "n/a"
+
+        if is_registry_mode:
+            # In registry mode: list_workers() pulls from Redis (cached 1s).
+            # We report registry_status based on whether the call succeeds.
+            try:
+                endpoints = router.list_workers()
+                registry_status = "ok"
+            except Exception:
+                endpoints = []
+                registry_status = "error"
+            for endpoint in endpoints:
+                workers_status.append(
+                    {
+                        "worker_id": endpoint.worker_id,
+                        "endpoint": str(endpoint),
+                        "host": endpoint.host,
+                        "port": endpoint.port,
+                    }
+                )
+        else:
+            # MockRouter mode: probe each statically-configured worker.
+            for endpoint in router.list_workers():
+                alive = _probe_worker(endpoint)
+                workers_status.append(
+                    {
+                        "endpoint": str(endpoint),
+                        "host": endpoint.host,
+                        "port": endpoint.port,
+                        "alive": alive,
+                    }
+                )
+
+        payload: dict = {
             "status": "ok",
             "server": _SERVER_NAME,
             "version": _SERVER_VERSION,
             "uptime_seconds": round(time.monotonic() - self.coordinator.start_time, 1),
             "workers": workers_status,
             "worker_count": len(workers_status),
-            "alive_count": sum(1 for w in workers_status if w["alive"]),
         }
+
+        if is_registry_mode:
+            payload["mode"] = "registry"
+            payload["registry_status"] = registry_status
+        else:
+            payload["mode"] = "static"
+            payload["alive_count"] = sum(1 for w in workers_status if w.get("alive"))
+
         body = json.dumps(payload, indent=2).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -183,6 +221,9 @@ class CoordinatorRequestHandler(BaseHTTPRequestHandler):
         # Select worker
         try:
             endpoint = self.coordinator.router.select_worker(request_method, request_params)
+        except NoWorkerAvailableError as exc:
+            self._send_jsonrpc_error(-32001, str(exc), body, http_status=503)
+            return
         except RuntimeError as exc:
             self._send_jsonrpc_error(-32000, str(exc), body)
             return
@@ -202,8 +243,22 @@ class CoordinatorRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(response_bytes)
 
-    def _send_jsonrpc_error(self, code: int, message: str, raw_body: bytes) -> None:
-        """Send a JSON-RPC error response derived from the incoming request body."""
+    def _send_jsonrpc_error(
+        self,
+        code: int,
+        message: str,
+        raw_body: bytes,
+        http_status: int = 200,
+    ) -> None:
+        """Send a JSON-RPC error response derived from the incoming request body.
+
+        Args:
+            code: JSON-RPC error code.
+            message: Human-readable error description.
+            raw_body: Raw request bytes (used to extract the request id).
+            http_status: HTTP status code to use in the response (default 200).
+                Use 503 for NoWorkerAvailableError so load-balancers can act on it.
+        """
         req_id = None
         try:
             parsed = json.loads(raw_body)
@@ -218,7 +273,7 @@ class CoordinatorRequestHandler(BaseHTTPRequestHandler):
             "id": req_id,
         }
         body = json.dumps(error_response).encode("utf-8")
-        self.send_response(200)
+        self.send_response(http_status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -353,8 +408,10 @@ def main() -> None:
         default=None,
         metavar="URL",
         help=(
-            "Registry URL for dynamic worker discovery (e.g. redis://localhost:6379).  "
-            "Not implemented yet — reserved for Wave 2B."
+            "Redis Registry URL for dynamic worker discovery "
+            "(e.g. redis://localhost:6379/0).  "
+            "Mutually exclusive with --worker.  "
+            "When supplied, the coordinator uses RegistryRouter with IDB affinity routing."
         ),
     )
     parser.add_argument(
@@ -367,33 +424,73 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Warn if registry URL was supplied but not yet supported.
-    if args.registry_url:
+    # ------------------------------------------------------------------
+    # Validate mutual exclusivity: --registry-url vs --worker
+    # ------------------------------------------------------------------
+    if args.registry_url and args.workers:
         print(
-            f"[coordinator] WARNING: --registry-url '{args.registry_url}' is reserved "
-            "for Wave 2B and will be ignored in this version.",
+            "[coordinator] ERROR: --registry-url and --worker are mutually exclusive. "
+            "Use --registry-url for dynamic discovery OR --worker for static endpoints.",
             file=sys.stderr,
             flush=True,
         )
+        sys.exit(1)
 
-    # Build the router from --worker flags.
-    endpoints: list[WorkerEndpoint] = []
-    for spec in args.workers:
+    # ------------------------------------------------------------------
+    # Build router
+    # ------------------------------------------------------------------
+    router: Router
+
+    if args.registry_url:
+        # Dynamic RegistryRouter backed by Redis.
         try:
-            endpoints.append(WorkerEndpoint.from_string(spec))
-        except ValueError as exc:
-            print(f"[coordinator] ERROR: {exc}", file=sys.stderr)
+            from ida_pro_mcp.distributed.registry import Registry
+        except ImportError as exc:
+            print(
+                f"[coordinator] ERROR: Could not import Registry (redis package missing?): {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
             sys.exit(1)
 
-    if not endpoints:
+        try:
+            registry = Registry(args.registry_url)
+            # Validate connectivity: try listing workers (raises RegistryError on failure).
+            registry.list_workers()
+        except Exception as exc:
+            print(
+                f"[coordinator] ERROR: Cannot connect to Redis registry at "
+                f"'{args.registry_url}': {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            sys.exit(1)
+
+        router = RegistryRouter(registry)
         print(
-            "[coordinator] WARNING: no --worker endpoints specified. "
-            "All MCP requests will fail until workers are added.",
-            file=sys.stderr,
+            f"[coordinator] Using RegistryRouter — Redis: {args.registry_url}",
             flush=True,
         )
+    else:
+        # Static MockRouter from --worker flags.
+        endpoints: list[WorkerEndpoint] = []
+        for spec in args.workers:
+            try:
+                endpoints.append(WorkerEndpoint.from_string(spec))
+            except ValueError as exc:
+                print(f"[coordinator] ERROR: {exc}", file=sys.stderr)
+                sys.exit(1)
 
-    router = MockRouter(workers=endpoints)
+        if not endpoints:
+            print(
+                "[coordinator] ERROR: No routing mode specified. "
+                "Provide --registry-url <URL> or --worker <HOST:PORT>.",
+                file=sys.stderr,
+                flush=True,
+            )
+            sys.exit(1)
+
+        router = MockRouter(workers=endpoints)
 
     server = CoordinatorServer(
         host=args.host,

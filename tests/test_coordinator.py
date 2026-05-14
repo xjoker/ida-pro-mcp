@@ -18,9 +18,19 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # Import targets
 # ---------------------------------------------------------------------------
 
+import fakeredis
+
 from ida_pro_mcp.coordinator import CoordinatorServer
 from ida_pro_mcp.distributed.forwarder import forward_request
-from ida_pro_mcp.distributed.router import MockRouter, Router, WorkerEndpoint
+from ida_pro_mcp.distributed.protocol import WorkerInfo
+from ida_pro_mcp.distributed.registry import Registry
+from ida_pro_mcp.distributed.router import (
+    MockRouter,
+    NoWorkerAvailableError,
+    RegistryRouter,
+    Router,
+    WorkerEndpoint,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +397,285 @@ class TestCoordinatorForwarding(unittest.TestCase):
                 data = json.loads(resp.read().decode())
             self.assertIn("error", data)
             self.assertEqual(data["id"], 5)
+        finally:
+            server.stop()
+
+
+# ===========================================================================
+# Helpers for RegistryRouter integration tests
+# ===========================================================================
+
+
+def _fake_registry_with_worker(
+    worker_id: str = "test-worker",
+    host: str = "127.0.0.1",
+    port: int = 13337,
+    loaded_idb: str | None = None,
+    score: float = 0.5,
+) -> Registry:
+    """Create a fakeredis-backed Registry pre-populated with one worker."""
+    server = fakeredis.FakeServer()
+    fake_client = fakeredis.FakeRedis(server=server)
+    reg = Registry.__new__(Registry)
+    reg._ns = "test"
+    reg._r = fake_client
+
+    now = time.time()
+    w = WorkerInfo(
+        worker_id=worker_id,
+        host=host,
+        port=port,
+        pid=9999,
+        capabilities=("idalib",),
+        loaded_idb=loaded_idb,
+        score=score,
+        started_at=now,
+        last_heartbeat=now,
+    )
+    reg.register(w)
+    return reg
+
+
+def _fake_empty_registry() -> Registry:
+    """Create a fakeredis-backed Registry with no workers."""
+    server = fakeredis.FakeServer()
+    fake_client = fakeredis.FakeRedis(server=server)
+    reg = Registry.__new__(Registry)
+    reg._ns = "test"
+    reg._r = fake_client
+    return reg
+
+
+# ===========================================================================
+# Tests: RegistryRouter with CoordinatorServer
+# ===========================================================================
+
+
+class TestCoordinatorWithRegistryRouter(unittest.TestCase):
+    """Integration tests: CoordinatorServer wired up with RegistryRouter."""
+
+    def test_registry_router_forwards_to_worker(self):
+        """CoordinatorServer with RegistryRouter routes POST /mcp to the worker."""
+        import urllib.request
+
+        canned = {"jsonrpc": "2.0", "result": {"tools": []}, "id": 10}
+        worker_srv, worker_port = _start_stub_server(json.dumps(canned).encode())
+
+        reg = _fake_registry_with_worker(port=worker_port)
+        router = RegistryRouter(reg)
+        coord_port = _find_free_port()
+        server = CoordinatorServer(host="127.0.0.1", port=coord_port, router=router)
+        server.serve(background=True)
+        time.sleep(0.15)
+        try:
+            req_body = json.dumps(
+                {"jsonrpc": "2.0", "method": "tools/list", "params": {}, "id": 10}
+            ).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{coord_port}/mcp",
+                data=req_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            self.assertEqual(data, canned)
+        finally:
+            server.stop()
+            worker_srv.shutdown()
+
+    def test_no_worker_in_registry_returns_503_json_rpc_error(self):
+        """Empty Registry → 503 response with JSON-RPC error code -32001."""
+        import urllib.request
+        import urllib.error
+
+        reg = _fake_empty_registry()
+        router = RegistryRouter(reg)
+        coord_port = _find_free_port()
+        server = CoordinatorServer(host="127.0.0.1", port=coord_port, router=router)
+        server.serve(background=True)
+        time.sleep(0.15)
+        try:
+            req_body = json.dumps(
+                {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 7}
+            ).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{coord_port}/mcp",
+                data=req_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                data = json.loads(e.read().decode())
+            self.assertIn("error", data)
+            self.assertEqual(data["error"]["code"], -32001)
+            self.assertEqual(data["id"], 7)
+        finally:
+            server.stop()
+
+    def test_health_endpoint_registry_mode(self):
+        """Health endpoint returns mode='registry' and registry_status when using RegistryRouter."""
+        import urllib.request
+
+        reg = _fake_registry_with_worker(worker_id="healthy-worker", port=13337)
+        router = RegistryRouter(reg)
+        coord_port = _find_free_port()
+        server = CoordinatorServer(host="127.0.0.1", port=coord_port, router=router)
+        server.serve(background=True)
+        time.sleep(0.15)
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{coord_port}/coordinator/health", timeout=5
+            ) as resp:
+                data = json.loads(resp.read().decode())
+            self.assertEqual(data["status"], "ok")
+            self.assertEqual(data["mode"], "registry")
+            self.assertIn("registry_status", data)
+            self.assertEqual(data["registry_status"], "ok")
+            self.assertIn("workers", data)
+        finally:
+            server.stop()
+
+    def test_health_endpoint_static_mode(self):
+        """Health endpoint returns mode='static' and alive_count for MockRouter."""
+        import urllib.request
+
+        dead_port = _find_free_port()
+        ep = WorkerEndpoint("127.0.0.1", dead_port)
+        router = MockRouter(workers=[ep])
+        coord_port = _find_free_port()
+        server = CoordinatorServer(host="127.0.0.1", port=coord_port, router=router)
+        server.serve(background=True)
+        time.sleep(0.15)
+        try:
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{coord_port}/coordinator/health", timeout=5
+            ) as resp:
+                data = json.loads(resp.read().decode())
+            self.assertEqual(data["mode"], "static")
+            self.assertIn("alive_count", data)
+        finally:
+            server.stop()
+
+    def test_idb_affinity_routing_through_coordinator(self):
+        """IDB-aware request is routed to the worker that has the IDB loaded."""
+        import urllib.request
+
+        idb = "/project/firmware.idb"
+
+        # Worker A has the IDB loaded (high load)
+        canned_a = {"jsonrpc": "2.0", "result": {"from": "worker_a"}, "id": 3}
+        worker_a_srv, worker_a_port = _start_stub_server(json.dumps(canned_a).encode())
+
+        # Worker B has lower load but no IDB (should NOT be selected)
+        canned_b = {"jsonrpc": "2.0", "result": {"from": "worker_b"}, "id": 3}
+        worker_b_srv, worker_b_port = _start_stub_server(json.dumps(canned_b).encode())
+
+        server = fakeredis.FakeServer()
+        fake_client = fakeredis.FakeRedis(server=server)
+        reg = Registry.__new__(Registry)
+        reg._ns = "test"
+        reg._r = fake_client
+
+        now = time.time()
+        w_a = WorkerInfo(
+            worker_id="worker-a",
+            host="127.0.0.1",
+            port=worker_a_port,
+            pid=1,
+            capabilities=(),
+            loaded_idb=idb,
+            score=0.9,  # high load
+            started_at=now,
+            last_heartbeat=now,
+        )
+        w_b = WorkerInfo(
+            worker_id="worker-b",
+            host="127.0.0.1",
+            port=worker_b_port,
+            pid=2,
+            capabilities=(),
+            loaded_idb=None,
+            score=0.1,  # low load
+            started_at=now,
+            last_heartbeat=now,
+        )
+        reg.register(w_a)
+        reg.register(w_b)
+
+        router = RegistryRouter(reg)
+        coord_port = _find_free_port()
+        coord_server = CoordinatorServer(
+            host="127.0.0.1", port=coord_port, router=router
+        )
+        coord_server.serve(background=True)
+        time.sleep(0.15)
+        try:
+            req_body = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "tools/call",
+                    "params": {"arguments": {"database": idb}},
+                    "id": 3,
+                }
+            ).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{coord_port}/mcp",
+                data=req_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+            # Should be routed to worker_a (IDB affinity)
+            self.assertEqual(data["result"]["from"], "worker_a")
+        finally:
+            coord_server.stop()
+            worker_a_srv.shutdown()
+            worker_b_srv.shutdown()
+
+
+# ===========================================================================
+# Tests: NoWorkerAvailableError error code and HTTP status
+# ===========================================================================
+
+
+class TestNoWorkerAvailableErrorHandling(unittest.TestCase):
+    """Verify that NoWorkerAvailableError produces code -32001 and HTTP 503."""
+
+    def test_error_code_is_32001(self):
+        """When RegistryRouter raises NoWorkerAvailableError, error code is -32001."""
+        from unittest.mock import MagicMock, patch
+
+        import urllib.request
+        import urllib.error
+
+        reg = _fake_empty_registry()
+        router = RegistryRouter(reg)
+        coord_port = _find_free_port()
+        server = CoordinatorServer(host="127.0.0.1", port=coord_port, router=router)
+        server.serve(background=True)
+        time.sleep(0.15)
+        try:
+            req_body = json.dumps(
+                {"jsonrpc": "2.0", "method": "tools/call", "params": {}, "id": 99}
+            ).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{coord_port}/mcp",
+                data=req_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    data = json.loads(resp.read().decode())
+            except urllib.error.HTTPError as e:
+                data = json.loads(e.read().decode())
+            self.assertEqual(data["error"]["code"], -32001)
+            self.assertEqual(data["id"], 99)
         finally:
             server.stop()
 
