@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "idapro>=0.0.7",
     "tomli-w>=1.0.0",
+    "redis>=5.0",
 ]
 
 [project.urls]
@@ -51,6 +52,7 @@ exclude = ["src/ida_pro_mcp/ida_mcp/zeromcp/*.py"]
 dev = [
     "ruff>=0.14.14",
     "commitizen>=4.0.0",
+    "fakeredis>=2.20.0",
 ]
 
 [tool.commitizen]
