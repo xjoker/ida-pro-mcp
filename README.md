@@ -59,19 +59,21 @@ claude mcp add --transport http ida-pro-mcp http://127.0.0.1:13337/mcp \
 
 ## API Overview
 
-**76 MCP Tools** including:
+**80+ MCP Tools** including:
 
 | Category | Tools |
 |----------|-------|
-| Analysis | `decompile`, `disasm`, `xrefs_to`, `callees`, `basic_blocks`, `insn_query`, `xref_query`, `func_profile` |
+| Analysis | `decompile` (含 `include_addresses` 标志), `disasm` (含 labels/comments/refs), `xrefs_to`, `callees`, `basic_blocks`, `insn_query`, `xref_query`, `func_profile` |
 | Composite | `analyze_function`, `analyze_batch`, `analyze_component`, `survey_binary` |
 | Memory | `get_bytes`, `get_string`, `get_int`, `patch` |
 | Types | `declare_type`, `set_type`, `infer_types`, `enum_upsert`, `type_query`, `type_inspect` |
 | Modify | `set_comments`, `append_comments`, `rename`, `patch_asm`, `define_func`, `define_code`, `undefine` |
-| Search | `find_bytes`, `find_insns`, `find_regex` |
+| Search | `find_bytes`, `find_insns`, `find_regex`, `search_text` |
+| Signature | `make_signature`, `find_signature` (sigmaker) |
 | Debug | `dbg_*` (20+ debugger tools, enable with `?ext=dbg`) |
 | Python | `py_eval`, `py_exec_file` |
 | Multi-Instance | `list_instances`, `select_instance` |
+| Trace | `ida-mcp-trace-dump` CLI (导出 JSONL，环境变量 `IDA_MCP_TRACE=0` 关闭) |
 
 **11 MCP Resources** for read-only access:
 - `ida://idb/metadata`, `ida://cursor`, `ida://structs`, `ida://xrefs/from/{addr}`, etc.

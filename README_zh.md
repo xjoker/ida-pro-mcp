@@ -59,19 +59,21 @@ claude mcp add --transport http ida-pro-mcp http://127.0.0.1:13337/mcp \
 
 ## API 概览
 
-**76 个 MCP 工具**：
+**80+ 个 MCP 工具**：
 
 | 分类 | 工具 |
 |------|------|
-| 分析 | `decompile`, `disasm`, `xrefs_to`, `callees`, `basic_blocks`, `insn_query`, `xref_query`, `func_profile` |
+| 分析 | `decompile`（含 `include_addresses` 标志）, `disasm`（含 labels/comments/refs）, `xrefs_to`, `callees`, `basic_blocks`, `insn_query`, `xref_query`, `func_profile` |
 | 复合分析 | `analyze_function`, `analyze_batch`, `analyze_component`, `survey_binary` |
 | 内存 | `get_bytes`, `get_string`, `get_int`, `patch` |
 | 类型 | `declare_type`, `set_type`, `infer_types`, `enum_upsert`, `type_query`, `type_inspect` |
 | 修改 | `set_comments`, `append_comments`, `rename`, `patch_asm`, `define_func`, `define_code`, `undefine` |
-| 搜索 | `find_bytes`, `find_insns`, `find_regex` |
+| 搜索 | `find_bytes`, `find_insns`, `find_regex`, `search_text` |
+| 签名 | `make_signature`, `find_signature`（sigmaker） |
 | 调试 | `dbg_*`（20+ 调试器工具，使用 `?ext=dbg` 启用） |
 | Python | `py_eval`, `py_exec_file` |
 | 多实例 | `list_instances`, `select_instance` |
+| 追踪 | `ida-mcp-trace-dump` CLI（导出 JSONL，环境变量 `IDA_MCP_TRACE=0` 关闭） |
 
 **11 个 MCP 资源**（只读访问）：
 - `ida://idb/metadata`, `ida://cursor`, `ida://structs`, `ida://xrefs/from/{addr}` 等
