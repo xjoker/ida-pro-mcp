@@ -1,0 +1,34 @@
+# Mock IDA worker image — for smoke testing only. Does NOT include IDA Pro.
+# Simulates the registration + heartbeat behavior of a real idalib-mcp worker.
+#
+# Build:   docker build -f tests/smoke/Dockerfile.mock-worker -t ida-mcp-mock-worker:smoke .
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+# Only needs redis client (no idapro, no fakeredis — talks to real Redis).
+RUN pip install --no-cache-dir redis>=5.0
+
+# Copy registry/protocol/lifecycle source + the mock worker script.
+COPY src/ida_pro_mcp/__init__.py           /app/src/ida_pro_mcp/__init__.py
+COPY src/ida_pro_mcp/distributed/          /app/src/ida_pro_mcp/distributed/
+COPY tests/smoke/mock_worker.py            /app/mock_worker.py
+
+# Stub ida_mcp package init to avoid loading IDA SDK.
+RUN mkdir -p /app/src/ida_pro_mcp/ida_mcp \
+    && echo '"""Stub for mock worker (no IDA SDK)."""' > /app/src/ida_pro_mcp/ida_mcp/__init__.py
+
+ENV PYTHONPATH=/app/src
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 13337
+
+ENTRYPOINT ["python", "/app/mock_worker.py"]
+CMD ["--redis", "redis://redis:6379/0", "--advertise-host", "mock-worker", "--port", "13337"]
+
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import http.client,sys; \
+c=http.client.HTTPConnection('127.0.0.1',13337,timeout=2); \
+c.request('GET','/health'); \
+sys.exit(0 if c.getresponse().status<400 else 1)" \
+  || exit 1

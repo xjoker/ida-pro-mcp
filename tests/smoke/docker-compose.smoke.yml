@@ -1,0 +1,94 @@
+# v1.5 smoke test compose — verifies the full multi-host flow WITHOUT a real IDA install.
+#
+# Services:
+#   redis            — Redis 7 (registry + task queue)
+#   coordinator      — Our ida-mcp-coordinator (Wave 1A/2B), public-distributable image
+#   mock-worker-1    — Mock idalib worker (no IDA), simulates loaded_idb=/demo/sample.idb
+#   mock-worker-2    — Mock idalib worker (no IDA), no loaded_idb (idle pool)
+#
+# Usage:
+#   docker compose -f tests/smoke/docker-compose.smoke.yml up --build
+#
+#   In another terminal:
+#     curl http://localhost:9000/coordinator/health | jq
+#     curl -X POST http://localhost:9000/mcp -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+#
+#   Test IDB affinity routing:
+#     curl -X POST http://localhost:9000/mcp -H 'Content-Type: application/json' \
+#       -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"mock_decompile","arguments":{"database":"/demo/sample.idb","ea":"0x401000"}}}'
+#     # Should route to mock-worker-1 (has /demo/sample.idb loaded)
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: idamcp-smoke-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  coordinator:
+    build:
+      context: ../..
+      dockerfile: tests/smoke/Dockerfile.coordinator
+    image: ida-mcp-coordinator:smoke
+    container_name: idamcp-smoke-coordinator
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command:
+      - "--registry-url"
+      - "redis://redis:6379/0"
+
+  mock-worker-1:
+    build:
+      context: ../..
+      dockerfile: tests/smoke/Dockerfile.mock-worker
+    image: ida-mcp-mock-worker:smoke
+    container_name: idamcp-smoke-mock-worker-1
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    command:
+      - "--redis"
+      - "redis://redis:6379/0"
+      - "--advertise-host"
+      - "mock-worker-1"
+      - "--port"
+      - "13337"
+      - "--loaded-idb"
+      - "/demo/sample.idb"
+      - "--capabilities"
+      - "mock,idalib,headless,demo"
+
+  mock-worker-2:
+    build:
+      context: ../..
+      dockerfile: tests/smoke/Dockerfile.mock-worker
+    image: ida-mcp-mock-worker:smoke
+    container_name: idamcp-smoke-mock-worker-2
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    command:
+      - "--redis"
+      - "redis://redis:6379/0"
+      - "--advertise-host"
+      - "mock-worker-2"
+      - "--port"
+      - "13337"
+      - "--capabilities"
+      - "mock,idalib,headless"
+
+networks:
+  default:
+    name: idamcp-smoke

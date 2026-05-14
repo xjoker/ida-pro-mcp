@@ -1,0 +1,72 @@
+# Worker Dockerfile TEMPLATE — for when you have an IDA Pro Linux install.
+#
+# 用户必须先准备一个 IDA Pro Linux 安装目录（floating/named-user license），
+# 然后从两种方案选一：
+#
+#   方案 A（推荐生产）：build 一个私有 ida-base 镜像，本 Dockerfile FROM 它
+#       1. 在私有 registry 上 build：
+#             docker build -t your-registry.example.com/ida-base:9.0 -f Dockerfile.ida-base .
+#          其中 Dockerfile.ida-base 应：
+#             - FROM ubuntu:22.04 或 debian:bookworm-slim
+#             - COPY ./ida-install/ /opt/ida/  (你的 IDA 9.x Linux 安装目录)
+#             - 安装 Python 3.12 + 关键系统库 (libxcb1, libgomp1, libxkbcommon0)
+#             - ENV PATH=/opt/ida:$PATH
+#             - ENV PYTHONPATH=/opt/ida/python:/opt/ida
+#             - ENV IDADIR=/opt/ida
+#       2. 推送：docker push your-registry.example.com/ida-base:9.0
+#       3. 修改下方 IDA_BASE 默认值
+#
+#   方案 C（开发用，本机 IDA 挂载）：跳过本 Dockerfile，用 docker-compose
+#       直接 mount 本机 IDA 安装目录到容器 /opt/ida，跑 ubuntu:22.04 base 即可。
+#
+# Build (方案 A)：
+#   docker build -t ida-mcp-worker:1.5.0 \
+#     --build-arg IDA_BASE=your-registry.example.com/ida-base:9.0 \
+#     -f tests/smoke/Dockerfile.worker.template .
+
+ARG IDA_BASE=your-registry.example.com/ida-base:9.0
+
+FROM ${IDA_BASE}
+
+WORKDIR /app
+
+# 安装我们 fork 的 ida-pro-mcp Python 包 + 多机部署运行时依赖
+# 注意：IDA base 镜像应该已经把 Python 3.12 + idapro Python binding 配好
+COPY pyproject.toml ./
+COPY src/ ./src/
+
+# 装运行时依赖。由于 IDA base 镜像可能没有 pip cache，强制安装：
+# - redis (Wave 1B Registry 客户端)
+# - idapro (用户的 IDA 安装目录里通常已经有，但确保 PyPI stub 包装层装上)
+# - tomli-w (配置文件写入)
+RUN pip install --no-cache-dir redis>=5.0 tomli-w>=1.0.0 \
+    && pip install --no-cache-dir --no-deps -e .
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app/src:${PYTHONPATH}
+
+# Advertise host 必须由编排平台注入（Docker network alias / K8s downward API）
+# 不要写死 0.0.0.0 — 会注册到 Redis 但 coordinator 无法连接
+ENV WORKER_ADVERTISE_HOST=""
+
+# IDA license 配置：
+# - Floating: HEXRAYS_LICENSE_FILE 指向 license server 文件
+# - Named user: 由 IDA 自动管理（需要出站 HTTPS）
+# - Hardcoded path to license file in case it's mounted as a secret:
+ENV IDAPRO_LICENSE=""
+
+EXPOSE 13337
+
+# Wave 2A WorkerLifecycle 接管启动流程，--registry-url 启用注册
+ENTRYPOINT ["idalib-mcp"]
+CMD ["--host", "0.0.0.0", \
+     "--port", "13337", \
+     "--registry-url", "redis://redis:6379/0"]
+
+# 健康检查通过 HTTP probe（idalib_server 在 v1.5-alpha 后会暴露 /health）
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
+  CMD python -c "import http.client,sys; \
+c=http.client.HTTPConnection('127.0.0.1',13337,timeout=3); \
+c.request('GET','/health'); \
+sys.exit(0 if c.getresponse().status<400 else 1)" \
+  || exit 1

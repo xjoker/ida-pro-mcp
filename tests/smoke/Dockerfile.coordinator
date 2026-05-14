@@ -1,0 +1,42 @@
+# Coordinator-only image. No IDA binaries, no idapro dep.
+# Public-distributable.
+#
+# Build:   docker build -f tests/smoke/Dockerfile.coordinator -t ida-mcp-coordinator:smoke .
+# Run:     docker run --rm -p 9000:9000 --network host ida-mcp-coordinator:smoke \
+#            --registry-url redis://127.0.0.1:6379/0
+FROM python:3.12-slim-bookworm
+
+WORKDIR /app
+
+# Install only runtime deps (skip idapro — coordinator doesn't need it).
+# This is the temporary workaround until pyproject.toml splits extras (Wave v1.5-alpha1 #2).
+RUN pip install --no-cache-dir redis>=5.0 tomli-w>=1.0.0
+
+# Copy source — coordinator + distributed package only.
+# We copy the full src to keep imports working (ida_pro_mcp/__init__.py is touched at import time).
+COPY src/ida_pro_mcp/coordinator.py        /app/src/ida_pro_mcp/coordinator.py
+COPY src/ida_pro_mcp/__init__.py           /app/src/ida_pro_mcp/__init__.py
+COPY src/ida_pro_mcp/distributed/          /app/src/ida_pro_mcp/distributed/
+COPY src/ida_pro_mcp/ida_mcp/zeromcp/      /app/src/ida_pro_mcp/ida_mcp/zeromcp/
+
+# Need empty stub for ida_mcp package init so the import chain doesn't pull idaapi.
+# This is a hack for smoke testing — production would split package.
+RUN mkdir -p /app/src/ida_pro_mcp/ida_mcp \
+    && echo '"""Stub for coordinator-only container (no IDA SDK)."""' > /app/src/ida_pro_mcp/ida_mcp/__init__.py
+
+ENV PYTHONPATH=/app/src
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 9000
+
+# Smoke test entrypoint — runs coordinator without registry by default.
+# Override via CMD: --registry-url redis://... or --worker host:port
+ENTRYPOINT ["python", "-m", "ida_pro_mcp.coordinator", "--host", "0.0.0.0", "--port", "9000"]
+CMD ["--worker", "mock-worker:13337"]
+
+HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=3 \
+  CMD python -c "import http.client,sys; \
+c=http.client.HTTPConnection('127.0.0.1',9000,timeout=2); \
+c.request('GET','/coordinator/health'); \
+sys.exit(0 if c.getresponse().status<400 else 1)" \
+  || exit 1
