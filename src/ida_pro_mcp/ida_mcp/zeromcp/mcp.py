@@ -331,12 +331,29 @@ class McpHttpRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _handle_mcp_post(self, body: bytes):
+        # Detect initialize requests to register new HTTP sessions
+        mcp_session_id: str | None = self.headers.get("Mcp-Session-Id")
+        try:
+            parsed = json.loads(body)
+            if isinstance(parsed, dict) and parsed.get("method") == "initialize":
+                if mcp_session_id is None:
+                    mcp_session_id = str(uuid.uuid4())
+                self.mcp_server.register_http_session(mcp_session_id)
+            elif mcp_session_id is not None:
+                if not self.mcp_server.has_http_session(mcp_session_id):
+                    print(
+                        f"[MCP] Re-registering HTTP session {mcp_session_id} after reconnect"
+                    )
+                    self.mcp_server.register_http_session(mcp_session_id)
+        except Exception:
+            pass
+
         # Parse extensions from query params and store in thread-local
         extensions = self._parse_extensions(self.path)
         setattr(self.mcp_server._enabled_extensions, "data", extensions)
 
         # Track transport session ID for cross-instance routing
-        session_id = self.headers.get("Mcp-Session-Id", "http:anonymous")
+        session_id = mcp_session_id if mcp_session_id else "http:anonymous"
         setattr(self.mcp_server._transport_session_id, "data", session_id)
 
         # Check if client accepts gzip encoding
@@ -402,6 +419,10 @@ class McpServer:
         self._server_thread: threading.Thread | None = None
         self._running = False
         self._sse_connections: dict[str, _McpSseConnection] = {}
+        self._http_sessions: dict[str, float] = {}
+        self._http_sessions_lock = threading.Lock()
+        self.http_session_ttl_sec = 24 * 60 * 60
+        self.http_session_max_count = 4096
         self._protocol_version = threading.local()
         self._enabled_extensions = threading.local()  # set[str] per request
         self._transport_session_id = threading.local()  # str per request
@@ -436,6 +457,40 @@ class McpServer:
     def set_unsafe_enabled(self, enabled: bool) -> None:
         """Enable or disable unsafe tool access at runtime."""
         self._unsafe_enabled = enabled
+
+    def _prune_http_sessions_locked(self, now: float) -> None:
+        if self.http_session_ttl_sec > 0:
+            cutoff = now - self.http_session_ttl_sec
+            expired = [
+                session_id
+                for session_id, last_seen in self._http_sessions.items()
+                if last_seen < cutoff
+            ]
+            for session_id in expired:
+                self._http_sessions.pop(session_id, None)
+        if self.http_session_max_count > 0:
+            while len(self._http_sessions) > self.http_session_max_count:
+                oldest = next(iter(self._http_sessions))
+                self._http_sessions.pop(oldest, None)
+
+    def register_http_session(self, session_id: str) -> None:
+        """Register or refresh an HTTP MCP session."""
+        now = time.monotonic()
+        with self._http_sessions_lock:
+            self._http_sessions.pop(session_id, None)
+            self._http_sessions[session_id] = now
+            self._prune_http_sessions_locked(now)
+
+    def has_http_session(self, session_id: str) -> bool:
+        """Check if an HTTP MCP session is registered."""
+        now = time.monotonic()
+        with self._http_sessions_lock:
+            self._prune_http_sessions_locked(now)
+            if session_id not in self._http_sessions:
+                return False
+            self._http_sessions.pop(session_id, None)
+            self._http_sessions[session_id] = now
+            return True
 
     def tool(self, func: Callable) -> Callable:
         return self.tools.method(func)
