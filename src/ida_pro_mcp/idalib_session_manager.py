@@ -7,6 +7,7 @@ Each session represents an opened binary with its own IDA database instance.
 import uuid
 import threading
 import logging
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
@@ -16,6 +17,9 @@ import idapro
 import ida_auto
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of transport→session bindings retained (LRU eviction).
+_MAX_TRANSPORT_BINDINGS = 256
 
 
 @dataclass
@@ -48,7 +52,8 @@ class IDASessionManager:
     def __init__(self):
         self._sessions: Dict[str, IDASession] = {}
         self._current_session_id: Optional[str] = None
-        self._transport_bindings: dict[str, str] = {}
+        # LRU-capped dict: OrderedDict used with move_to_end for O(1) eviction.
+        self._transport_bindings: OrderedDict[str, str] = OrderedDict()
         self._lock = threading.RLock()
         logger.info("IDASessionManager initialized")
 
@@ -245,11 +250,22 @@ class IDASessionManager:
     # ================================================================
 
     def bind_transport_session(self, transport_id: str, session_id: str) -> None:
-        """Bind a transport session to an IDA session for isolated context."""
+        """Bind a transport session to an IDA session for isolated context.
+
+        The binding table is LRU-capped at _MAX_TRANSPORT_BINDINGS entries so
+        long-running servers do not leak memory across reconnects.
+        """
         with self._lock:
             if session_id not in self._sessions:
                 raise ValueError(f"Session not found: {session_id}")
+            # Refresh position if already present; otherwise add at the end.
+            if transport_id in self._transport_bindings:
+                self._transport_bindings.move_to_end(transport_id)
             self._transport_bindings[transport_id] = session_id
+            # Evict oldest entries when over the cap.
+            while len(self._transport_bindings) > _MAX_TRANSPORT_BINDINGS:
+                evicted_tid, _ = self._transport_bindings.popitem(last=False)
+                logger.debug(f"Evicted stale transport binding: {evicted_tid}")
             logger.debug(f"Bound transport {transport_id} -> session {session_id}")
 
     def get_session_for_transport(self, transport_id: str) -> str | None:
