@@ -9,6 +9,9 @@ import idapro
 
 from ida_pro_mcp.ida_mcp import MCP_SERVER
 
+# distributed 注册支持（可选，仅当 --registry-url 指定时启用）
+_lifecycle = None  # type: ignore[assignment]
+
 """IDALib-specific MCP tools for managing multiple binary sessions
 """
 from typing import Annotated, Optional
@@ -72,6 +75,10 @@ def idalib_open(
         if transport_id:
             manager.bind_transport_session(transport_id, session_id_result)
 
+        # 通知 lifecycle 新加载的 IDB（分布式模式，best-effort）
+        if _lifecycle is not None:
+            _lifecycle.update_loaded_idb(str(session.input_path.resolve()))
+
         return {
             "success": True,
             "session": session.to_dict(),
@@ -114,6 +121,11 @@ def idalib_close(session_id: Annotated[str, "Session ID to close"]) -> dict:
         manager = get_session_manager()
 
         if manager.close_session(session_id):
+            # 通知 lifecycle IDB 已卸载（分布式模式，best-effort）
+            if _lifecycle is not None:
+                current = manager.get_current_session()
+                idb_path = str(current.input_path.resolve()) if current else None
+                _lifecycle.update_loaded_idb(idb_path)
             return {"success": True, "message": f"Session closed: {session_id}"}
         else:
             return {"success": False, "error": f"Session not found: {session_id}"}
@@ -323,6 +335,8 @@ def _install_context_hooks(session_manager):
 
 
 def main():
+    global _lifecycle
+
     parser = argparse.ArgumentParser(description="MCP server for IDA Pro via idalib")
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Show debug messages"
@@ -338,6 +352,27 @@ def main():
     )
     parser.add_argument(
         "--unsafe", action="store_true", help="Enable unsafe functions (DANGEROUS)"
+    )
+    parser.add_argument(
+        "--registry-url",
+        type=str,
+        default=None,
+        metavar="URL",
+        help=(
+            "Redis URL for distributed worker registry "
+            "(e.g. redis://localhost:6379/0). "
+            "Omit for standalone / single-machine mode."
+        ),
+    )
+    parser.add_argument(
+        "--worker-capabilities",
+        type=str,
+        default="idalib,headless",
+        metavar="CAP1,CAP2",
+        help=(
+            "Comma-separated capability tags reported to the registry. "
+            "Default: idalib,headless"
+        ),
     )
     parser.add_argument(
         "input_path",
@@ -365,6 +400,30 @@ def main():
 
     session_manager = get_session_manager()
 
+    # ---------------------------------------------------------------------- #
+    # 分布式 Worker 注册（仅当 --registry-url 指定时启用）                     #
+    # ---------------------------------------------------------------------- #
+    if args.registry_url:
+        from ida_pro_mcp.distributed.registry import Registry
+        from ida_pro_mcp.distributed.worker_lifecycle import WorkerLifecycle
+
+        caps = tuple(
+            c.strip() for c in args.worker_capabilities.split(",") if c.strip()
+        )
+        registry = Registry(args.registry_url)
+        _lifecycle = WorkerLifecycle(
+            registry=registry,
+            host=args.host,
+            port=args.port,
+            capabilities=caps,
+        )
+        _lifecycle.start()
+        logger.info(
+            "Worker registered to registry %s (worker_id=%s)",
+            args.registry_url,
+            _lifecycle.worker_id,
+        )
+
     # Open initial binary if provided
     if args.input_path is not None:
         if not args.input_path.exists():
@@ -375,6 +434,10 @@ def main():
             args.input_path, run_auto_analysis=True
         )
         logger.info(f"Initial session created: {session_id}")
+
+        # 通知 lifecycle 当前加载的 IDB
+        if _lifecycle is not None:
+            _lifecycle.update_loaded_idb(str(args.input_path.resolve()))
     else:
         logger.info(
             "No initial binary specified. Use idalib_open() to load binaries dynamically."
@@ -385,6 +448,9 @@ def main():
     # IDA database cleanly before the process terminates.
     def cleanup_and_exit(signum, frame):
         logger.info("Shutting down...")
+        # 先注销 worker（best-effort，不阻塞关闭流程）
+        if _lifecycle is not None:
+            _lifecycle.stop()
         logger.info("Closing all IDA sessions...")
         session_manager.close_all_sessions()
         logger.info("All sessions closed.")
