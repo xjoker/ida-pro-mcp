@@ -715,6 +715,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         "long long int",
         "signed long long",
         "signed long long int",
+        "signed __int64",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_INT64)
     elif type_name in (
@@ -726,6 +727,7 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         "unsigned long long int",
         "qword",
         "QWORD",
+        "unsigned __int64",
     ):
         return ida_typeinf.tinfo_t(ida_typeinf.BTF_UINT64)
     # 128-bit integers
@@ -764,8 +766,12 @@ def get_type_by_name(type_name: str) -> ida_typeinf.tinfo_t:
         return tif
 
     # Try parsing as a type string (e.g., "int *")
+    # parse_decl returns '' on success in IDA 9.0, check is not None
     tif = ida_typeinf.tinfo_t()
-    if ida_typeinf.parse_decl(tif, None, f"{type_name} x;", ida_typeinf.PT_SIL):
+    if (
+        ida_typeinf.parse_decl(tif, None, f"{type_name} x;", ida_typeinf.PT_SIL) is not None
+        and not tif.empty()
+    ):
         return tif
 
     raise IDAError(f"Unable to retrieve {type_name} type info object")

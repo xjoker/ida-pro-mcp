@@ -8,6 +8,7 @@ import ida_frame
 import ida_ida
 import idaapi
 
+from .compat import tinfo_get_udm
 from .rpc import tool
 from .sync import idasync, ida_major
 from .utils import (
@@ -370,7 +371,7 @@ def set_type(edits: list[TypeEdit] | TypeEdit) -> list[dict]:
                     results.append({"edit": edit, "error": "No frame"})
                     continue
 
-                idx, udm = frame_tif.get_udm(edit["name"])
+                idx, udm = tinfo_get_udm(frame_tif, edit["name"])
                 if not udm:
                     results.append({"edit": edit, "error": f"{edit['name']} not found"})
                     continue
