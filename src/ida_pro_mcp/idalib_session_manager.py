@@ -55,6 +55,9 @@ class IDASessionManager:
         # LRU-capped dict: OrderedDict used with move_to_end for O(1) eviction.
         self._transport_bindings: OrderedDict[str, str] = OrderedDict()
         self._lock = threading.RLock()
+        # Serialises the check-and-switch sequence so two transports cannot
+        # simultaneously conclude they need to switch and corrupt IDB state.
+        self._switch_lock = threading.Lock()
         logger.info("IDASessionManager initialized")
 
     def open_binary(
@@ -304,20 +307,26 @@ class IDASessionManager:
 
         If the transport has a binding and it differs from the current session,
         switches to the bound session. Returns the active session ID.
+
+        The entire "compare current session → decide to switch → perform switch"
+        sequence is serialised under _switch_lock so two concurrent transports
+        cannot both conclude they need to switch and then race to corrupt IDB state
+        (TOCTOU guard).
         """
         if not transport_id:
             return self._current_session_id
 
-        # Check binding under lock, then release before switching (avoids long hold)
-        needs_switch = False
-        bound_id = None
-        with self._lock:
-            bound_id = self._transport_bindings.get(transport_id)
-            if bound_id and bound_id != self._current_session_id and bound_id in self._sessions:
-                needs_switch = True
+        with self._switch_lock:
+            with self._lock:
+                bound_id = self._transport_bindings.get(transport_id)
+                if not bound_id or bound_id not in self._sessions:
+                    return self._current_session_id
+                already_active = (bound_id == self._current_session_id)
 
-        if needs_switch and bound_id:
-            self.switch_session(bound_id)  # Let exception propagate — caller must not run on wrong IDB
+            if not already_active:
+                # switch_session acquires _lock internally; called outside _lock
+                # but still inside _switch_lock so the decision is atomic.
+                self.switch_session(bound_id)  # propagate on wrong-IDB failure
 
         return self._current_session_id
 
